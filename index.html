@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Атака CRM</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <div class="mobile-nav-backdrop" id="mobileNavBackdrop"></div>
+      <aside class="sidebar" aria-label="Главная навигация">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><img src="assets/ataka-logo.png" alt="" /></span>
+          <div>
+            <strong>Атака CRM</strong>
+            <span>футбольная школа</span>
+          </div>
+        </div>
+
+        <nav class="nav-list" id="navList"></nav>
+
+        <div class="role-card" id="accountPanel"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="topbar-title">
+            <button class="icon-btn mobile-menu-btn" type="button" id="mobileMenuBtn" aria-label="Открыть меню">☰</button>
+            <div>
+              <p class="eyebrow" id="sectionEyebrow">Сегодня, 17 июля</p>
+              <h1 id="pageTitle">Рабочий стол</h1>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <button class="ghost-btn" type="button" id="stockBtn">СТОК</button>
+          </div>
+        </header>
+
+        <section class="login-hero" id="welcomePanel">
+          <div class="welcome-copy">
+            <p class="eyebrow">MVP по книге школы</p>
+            <h2>Единое место для учеников, тренировок, оплат и отчетов.</h2>
+            <p>
+              Интерфейс собран вокруг реального процесса: пробная тренировка, отметка посещаемости,
+              переход в активные, начисления, оплаты и закрытие месяца по каждому филиалу.
+            </p>
+          </div>
+          <div class="welcome-logo" aria-hidden="true">
+            <img src="assets/ataka-logo.jpg" alt="" />
+          </div>
+        </section>
+
+        <section id="viewRoot" class="view-root" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <dialog id="studentDialog" class="modal">
+      <form method="dialog" class="modal-panel" id="studentForm">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Новая карточка</p>
+            <h2>Добавить ученика</h2>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit" aria-label="Закрыть">×</button>
+        </div>
+        <div class="form-grid">
+          <label>Имя ребенка<input name="firstName" required placeholder="Например, Артем" /></label>
+          <label>Фамилия ребенка<input name="lastName" required placeholder="Например, Иванов" /></label>
+          <label>Возраст<input name="age" required type="number" min="3" max="18" value="8" /></label>
+          <label>Родитель<input name="parent" placeholder="Можно заполнить позже" /></label>
+          <label>Телефон<input name="phone" placeholder="Можно заполнить позже" /></label>
+          <label>VK родителя<input name="parentVk" placeholder="Ссылка на профиль" /></label>
+          <label>Филиал<select name="branch" id="studentBranch"></select></label>
+          <label class="hidden-field"><select name="group" id="studentGroup"></select></label>
+          <label>Источник<select name="source">
+            <option>школа</option>
+            <option>пробное мероприятие</option>
+            <option>группа ВКонтакте</option>
+            <option>телефон</option>
+            <option>рекомендация знакомых</option>
+            <option>другое</option>
+          </select></label>
+          <label>Статус<select name="status">
+            <option>Пробный</option>
+            <option>Активный</option>
+            <option>Неактивный</option>
+          </select></label>
+        </div>
+        <label>Комментарий<textarea name="comment" rows="3" placeholder="Что важно помнить сотруднику"></textarea></label>
+        <menu class="modal-actions">
+          <button class="ghost-btn" value="cancel" type="submit">Отмена</button>
+          <button class="primary-btn" value="default" type="submit">Сохранить</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="assistantDialog" class="modal">
+      <form method="dialog" class="modal-panel" id="assistantForm">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Тренировка</p>
+            <h2>Выбрать помощника</h2>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit" aria-label="Закрыть">×</button>
+        </div>
+        <p class="muted">Оплата помощника появится только после выбора тренера в этом окне.</p>
+        <label>Помощник тренера<select id="assistantTrainerSelect" name="assistant"></select></label>
+        <menu class="modal-actions">
+          <button class="danger-btn" value="remove" type="submit">Убрать помощника</button>
+          <button class="ghost-btn" value="cancel" type="submit">Отмена</button>
+          <button class="primary-btn" value="default" type="submit">Сохранить</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="supabase-config.js"></script>
+    <script src="supabase-sync.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
