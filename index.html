@@ -32,9 +32,7 @@
               <h1 id="pageTitle">Рабочий стол</h1>
             </div>
           </div>
-          <div class="topbar-actions">
-            <button class="ghost-btn" type="button" id="stockBtn">СТОК</button>
-          </div>
+          <div class="topbar-actions"></div>
         </header>
 
         <section class="login-hero" id="welcomePanel">
@@ -62,7 +60,7 @@
             <p class="eyebrow">Новая карточка</p>
             <h2>Добавить ученика</h2>
           </div>
-          <button class="icon-btn" value="cancel" type="submit" aria-label="Закрыть">×</button>
+          <button class="icon-btn" value="cancel" type="button" data-student-cancel aria-label="Закрыть">×</button>
         </div>
         <div class="form-grid">
           <label>Имя ребенка<input name="firstName" required placeholder="Например, Артем" /></label>
@@ -89,7 +87,7 @@
         </div>
         <label>Комментарий<textarea name="comment" rows="3" placeholder="Что важно помнить сотруднику"></textarea></label>
         <menu class="modal-actions">
-          <button class="ghost-btn" value="cancel" type="submit">Отмена</button>
+          <button class="ghost-btn" value="cancel" type="button" data-student-cancel>Отмена</button>
           <button class="primary-btn" value="default" type="submit">Сохранить</button>
         </menu>
       </form>
@@ -110,6 +108,27 @@
           <button class="danger-btn" value="remove" type="submit">Убрать помощника</button>
           <button class="ghost-btn" value="cancel" type="submit">Отмена</button>
           <button class="primary-btn" value="default" type="submit">Сохранить</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="extraTrainingDialog" class="modal">
+      <form method="dialog" class="modal-panel" id="extraTrainingForm">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Тренер</p>
+            <h2>Дополнительная тренировка</h2>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit" aria-label="Закрыть">×</button>
+        </div>
+        <div class="form-grid">
+          <label>День тренировки<input name="date" type="date" required /></label>
+          <label>Начало<input name="startTime" type="time" required /></label>
+          <label>Конец<input name="endTime" type="time" required /></label>
+        </div>
+        <menu class="modal-actions">
+          <button class="ghost-btn" value="cancel" type="submit">Отмена</button>
+          <button class="primary-btn" value="default" type="submit">Создать</button>
         </menu>
       </form>
     </dialog>

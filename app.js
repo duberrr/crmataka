@@ -1,5 +1,5 @@
 ﻿const STORAGE_KEY = "ataka-crm-v2";
-const TODAY = "2026-07-17";
+const TODAY = todayIso();
 const SESSION_KEY = "ataka-crm-session-user";
 const SESSION_LOGIN_KEY = "ataka-crm-session-login";
 const CURRENT_MONTH = "2026-08";
@@ -9,9 +9,16 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 5 * 60 * 1000;
 const SUPABASE_LOGIN_DOMAIN = "ataka.local";
 
+function todayIso() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
 const defaultData = {
   currentUserId: "u1",
   activeView: "today",
+  settingsTab: "general",
   query: "",
   security: { loginFailures: {} },
   filters: { branchId: "all", groupId: "all", month: CURRENT_MONTH },
@@ -160,7 +167,7 @@ const labels = {
   TRIAL_MARK: "Пробная",
   PLANNED: "Запланирована",
   DONE: "Проведена",
-  NOT_HELD: "Не было",
+  NOT_HELD: "Не запланирована",
   CANCELLED: "Отменена",
   MOVED: "Перенесена",
   REGULAR: "Постоянная",
@@ -194,7 +201,6 @@ const navList = document.getElementById("navList");
 const pageTitle = document.getElementById("pageTitle");
 const accountPanel = document.getElementById("accountPanel");
 const globalSearch = document.getElementById("globalSearch");
-const stockButton = document.getElementById("stockBtn");
 const mobileMenuButton = document.getElementById("mobileMenuBtn");
 const mobileNavBackdrop = document.getElementById("mobileNavBackdrop");
 const dialog = document.getElementById("studentDialog");
@@ -202,6 +208,8 @@ const studentForm = document.getElementById("studentForm");
 const assistantDialog = document.getElementById("assistantDialog");
 const assistantForm = document.getElementById("assistantForm");
 const assistantTrainerSelect = document.getElementById("assistantTrainerSelect");
+const extraTrainingDialog = document.getElementById("extraTrainingDialog");
+const extraTrainingForm = document.getElementById("extraTrainingForm");
 const toastHost = document.getElementById("toastHost");
 
 function clone(value) {
@@ -503,7 +511,7 @@ function syncRealSchedule() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
 
-function createTrainingsFromRealSchedule(month) {
+function createTrainingsFromRealSchedule(month, fromDate = "") {
   const [year, monthNumber] = month.split("-").map(Number);
   const daysInMonth = new Date(year, monthNumber, 0).getDate();
 
@@ -513,8 +521,17 @@ function createTrainingsFromRealSchedule(month) {
 
     for (let day = 1; day <= daysInMonth; day += 1) {
       const date = `${year}-${String(monthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      if (fromDate && date < fromDate) continue;
       const weekday = new Date(`${date}T12:00:00`).getDay();
       if (weekday !== schedule.weekday) continue;
+      const existing = db.trainings.some((training) =>
+        training.groupId === group.id &&
+        training.date === date &&
+        training.startTime === schedule.startTime &&
+        training.endTime === schedule.endTime &&
+        !training.deletedAt
+      );
+      if (existing) continue;
 
       db.trainings.push({
         id: `real_tr_${schedule.id}_${date}`,
@@ -535,6 +552,24 @@ function createTrainingsFromRealSchedule(month) {
       });
     }
   });
+}
+
+function trainingHasMarks(trainingId) {
+  return db.attendance.some((mark) => mark.trainingId === trainingId && mark.mark && mark.mark !== "EMPTY");
+}
+
+function rebuildBranchTrainingsFromSchedule(branchId) {
+  const group = byId(db.groups, ensureRosterGroup(branchId));
+  if (!group) return;
+
+  db.trainings = db.trainings.filter((training) => {
+    if (training.branchId !== branchId || training.type !== "REGULAR") return true;
+    if (training.date < TODAY) return true;
+    if (trainingHasMarks(training.id)) return true;
+    return false;
+  });
+
+  AVAILABLE_MONTHS.forEach((month) => createTrainingsFromRealSchedule(month, TODAY));
 }
 
 function syncAssistantRule() {
@@ -683,23 +718,6 @@ function normalizeChargesToConfirmed() {
   return changed;
 }
 
-function stockReset() {
-  clearOperationalTables();
-  db.filters = { branchId: "all", groupId: "all", month: CURRENT_MONTH };
-  db.trainingFilters = { branchId: "all", month: CURRENT_MONTH };
-  db.coachFilters = { branchId: "all", month: CURRENT_MONTH };
-  db.paymentFilters = { branchId: "all", month: CURRENT_MONTH };
-  db.messageFilters = { branchId: "all", month: CURRENT_MONTH };
-  db.excelMonth = CURRENT_MONTH;
-  db.excelBranchId = activeBranches()[0]?.id || "all";
-  db.activeView = "today";
-  db.query = "";
-  db.selectedTrainingId = null;
-  audit("СТОК", "очищены отметки, начисления, оплаты и переносы");
-  saveData("СТОК выполнен");
-  render();
-}
-
 function ensureRosterGroup(branchId) {
   const existing = db.groups.find((group) => group.branchId === branchId && group.name === "Основная группа" && !group.deletedAt);
   if (existing) return existing.id;
@@ -824,7 +842,9 @@ async function verifyUserPassword(user, password) {
 }
 
 function nowText() {
-  return "2026-07-17 17:00";
+  const now = new Date();
+  const date = todayIso();
+  return `${date} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
 function loggedUserId() {
@@ -944,6 +964,25 @@ function formatDateTime(value) {
 
 function weekdayName(day) {
   return ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][day];
+}
+
+function weekdayFullName(day) {
+  return ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"][day];
+}
+
+function branchScheduleMap(branchId) {
+  const groupId = ensureRosterGroup(branchId);
+  const map = new Map();
+  db.schedules
+    .filter((schedule) => schedule.groupId === groupId && !schedule.endsAt)
+    .forEach((schedule) => {
+      if (!map.has(schedule.weekday)) map.set(schedule.weekday, schedule);
+    });
+  return map;
+}
+
+function timeIsValid(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ""));
 }
 
 function xmlEscape(value) {
@@ -1802,11 +1841,12 @@ function cleanText(value, maxLength = 200) {
 
 function render() {
   updateChargeStatuses();
+  const sectionEyebrow = document.getElementById("sectionEyebrow");
+  if (sectionEyebrow) sectionEyebrow.textContent = `Сегодня, ${formatDate(TODAY)}`;
   if (!isLoggedIn()) {
     navList.innerHTML = "";
     pageTitle.textContent = "Вход";
     document.getElementById("welcomePanel").hidden = true;
-    if (stockButton) stockButton.hidden = true;
     renderAccountPanel();
     root.innerHTML = viewLogin();
     bindView();
@@ -1833,6 +1873,7 @@ function render() {
   if (!db.financeFilters) db.financeFilters = { branchId: "all", month: CURRENT_MONTH };
   if (!db.paymentFilters) db.paymentFilters = { branchId: "all", month: CURRENT_MONTH };
   if (!db.messageFilters) db.messageFilters = { branchId: "all", month: CURRENT_MONTH };
+  if (!["general", "schedule", "users"].includes(db.settingsTab)) db.settingsTab = "general";
   if (!db.messageFilters.month || !AVAILABLE_MONTHS.includes(db.messageFilters.month)) db.messageFilters.month = CURRENT_MONTH;
   if (!AVAILABLE_MONTHS.includes(db.trainingFilters.month)) db.trainingFilters.month = CURRENT_MONTH;
   if (!AVAILABLE_MONTHS.includes(db.coachFilters.month)) db.coachFilters.month = CURRENT_MONTH;
@@ -1857,7 +1898,6 @@ function render() {
   const current = navItems.find(([idValue]) => idValue === db.activeView);
   pageTitle.textContent = db.activeView === "excel" ? "Excel" : current?.[2] || "Атака CRM";
   document.getElementById("welcomePanel").hidden = db.activeView !== "today";
-  if (stockButton) stockButton.hidden = !isOwner();
   renderAccountPanel();
   if (globalSearch) globalSearch.value = db.query;
 
@@ -2167,7 +2207,7 @@ function viewStudents() {
                 <td>${parent.name}<br><span class="muted">${parent.phone}</span></td>
                 <td>${st.visited}/${st.possible} · ${st.percent}%</td>
                 <td>${isOwner() ? `К оплате ${money(fin.toPay)}<br><span class="muted">долг ${money(fin.debt)}</span>` : "скрыто"}</td>
-                <td>${actionButton("Редактировать", "edit-student", student.id, "primary-btn")}</td>
+                <td><div class="split-actions">${actionButton("Редактировать", "edit-student", student.id, "primary-btn")}${actionButton("×", "delete-student", student.id, "danger-btn icon-danger-btn")}</div></td>
               </tr>`;
             }).join("")}
           </tbody>
@@ -2369,7 +2409,7 @@ function viewCoachMode() {
             <h2>${formatDate(selected.date)} · ${selected.startTime}-${selected.endTime}</h2>
             <p>${branchName(selected.branchId)} · ${userName(selected.trainerId)}${selected.assistantConfirmed && selected.assistantId ? ` · помощник ${userName(selected.assistantId)}` : ""}</p>
           </div>
-          <div class="training-tools">${trainerChangeControl(selected)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", selected.id, "primary-btn")}${actionButton(selected.assistantConfirmed && selected.assistantId ? `Помощник: ${userName(selected.assistantId)}` : "Был помощник", "toggle-assistant", selected.id)}${actionButton("Завершить", "finish-training", selected.id)}</div></div>
+          <div class="training-tools">${trainerChangeControl(selected)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", selected.id, "primary-btn")}${actionButton(selected.assistantConfirmed && selected.assistantId ? `Помощник: ${userName(selected.assistantId)}` : "Был помощник", "toggle-assistant", selected.id)}${actionButton("+ Доп. тренировка", "open-extra-training", selected.id)}</div></div>
         </div>
         <div class="training-summary">
           <span><strong>${students.length}</strong> учеников</span>
@@ -2954,14 +2994,64 @@ function debtMessage(debtId) {
 function viewSettings() {
   if (!isOwner()) return denied();
   const branchColumns = db.branches.filter((branch) => !branch.deletedAt && !branch.archivedAt && branch.isActive);
+  const weekOrder = [1, 2, 3, 4, 5, 6, 0];
+  const tab = ["general", "schedule", "users"].includes(db.settingsTab) ? db.settingsTab : "general";
+  const tabButton = (idValue, label) => `<button class="tab-btn ${tab === idValue ? "active" : ""}" type="button" data-action="set-settings-tab" data-id="${idValue}">${label}</button>`;
   return `
-    <div class="grid cols-2">
+    <section class="panel settings-tabs-panel">
+      <div class="settings-tabs">
+        ${tabButton("general", "Общие")}
+        ${tabButton("schedule", "Расписание")}
+        ${tabButton("users", "Пользователи")}
+      </div>
+    </section>
+    ${tab === "general" ? `
       <section class="panel">
         <div class="panel-head"><div><h2>Общие настройки</h2><p>Изменение цены не пересчитывает старые начисления автоматически.</p></div></div>
         <label>Стоимость одной тренировки, ₽<input id="priceInput" type="number" min="0" value="${db.settings.pricePerTraining}"></label>
         <label>Срок оплаты, число месяца<input id="dueInput" type="number" min="1" max="28" value="${db.settings.dueDay}"></label>
         <div class="split-actions"><button class="primary-btn" type="button" data-action="save-settings" data-id="settings">Сохранить настройки</button></div>
       </section>
+    ` : ""}
+    ${tab === "schedule" ? `
+      <section class="panel schedule-settings-panel">
+        <div class="panel-head">
+          <div><h2>Расписание</h2><p>Меняйте дни и время тренировок по каждому филиалу.</p></div>
+        </div>
+        <form id="scheduleSettingsForm">
+          <div class="schedule-settings">
+            ${branchColumns.map((branch) => {
+              const scheduleMap = branchScheduleMap(branch.id);
+              return `
+                <details class="accordion-drop">
+                  <summary>
+                    <span>${escapeHtml(branch.name)}</span>
+                    <strong>${scheduleMap.size} дн.</strong>
+                  </summary>
+                  <div class="accordion-body schedule-week">
+                    ${weekOrder.map((day) => {
+                      const schedule = scheduleMap.get(day);
+                      return `
+                        <div class="schedule-day-row">
+                          <label class="schedule-day-toggle">
+                            <input type="checkbox" name="scheduleActive_${branch.id}_${day}" ${schedule ? "checked" : ""}>
+                            <span>${weekdayFullName(day)}</span>
+                          </label>
+                          <label>Начало<input type="time" name="scheduleStart_${branch.id}_${day}" value="${escapeHtml(schedule?.startTime || "")}"></label>
+                          <label>Конец<input type="time" name="scheduleEnd_${branch.id}_${day}" value="${escapeHtml(schedule?.endTime || "")}"></label>
+                        </div>
+                      `;
+                    }).join("")}
+                  </div>
+                </details>
+              `;
+            }).join("")}
+          </div>
+          <div class="split-actions"><button class="primary-btn" type="button" data-action="save-settings" data-id="settings">Сохранить расписание</button></div>
+        </form>
+      </section>
+    ` : ""}
+    ${tab === "users" ? `
       <section class="panel">
         <div class="panel-head">
           <div><h2>Пользователи и роли</h2><p>Владелец создаёт учетные записи, назначает роль и филиалы.</p></div>
@@ -3018,7 +3108,7 @@ function viewSettings() {
           <div class="split-actions"><button class="primary-btn" type="button" data-action="save-settings" data-id="settings">Сохранить пользователей и роли</button></div>
         </form>
       </section>
-    </div>
+    ` : ""}
   `;
 }
 
@@ -3763,15 +3853,15 @@ function runAction(action, itemId) {
     "create-month": () => createMonth(itemId),
     "open-training": () => {
       const training = byId(db.trainings, itemId);
-      const filters = trainingPageFilters();
+      if (!training) return toast("Тренировка не найдена");
+      const filters = coachPageFilters();
       filters.branchId = training.branchId;
       filters.month = training.month;
-      db.selectedTrainingId = training.id;
-      db.showTrainingPicker = false;
-      db.activeView = "trainings";
+      db.coachSelectedTrainingId = training.id;
+      db.activeView = "coach";
       saveData();
       render();
-      document.getElementById("attendancePanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.querySelector(".coach-attendance-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     },
     "toggle-training-picker": () => { db.showTrainingPicker = !db.showTrainingPicker; saveData(); render(); },
     "toggle-calendar": () => { db.showCalendar = !db.showCalendar; saveData(); render(); },
@@ -3839,6 +3929,11 @@ function runAction(action, itemId) {
     },
     "export-excel": () => downloadExcelWorkbook(),
     "delete-user-account": () => deleteUserAccount(itemId),
+    "set-settings-tab": () => {
+      db.settingsTab = ["general", "schedule", "users"].includes(itemId) ? itemId : "general";
+      saveData();
+      render();
+    },
     "inactive": () => {
       const student = byId(db.students, itemId);
       student.status = "INACTIVE";
@@ -3857,6 +3952,7 @@ function runAction(action, itemId) {
     "add-branch": () => addBranch(),
     "add-group": () => addGroup(),
     "add-training": () => addTraining(),
+    "open-extra-training": () => openExtraTrainingDialog(itemId),
     "toggle-assistant": () => toggleAssistant(itemId),
     "finish-training": () => {
       const training = byId(db.trainings, itemId);
@@ -3905,7 +4001,6 @@ function runAction(action, itemId) {
       saveData();
       render();
     },
-    "stock-reset": () => stockReset()
   };
   actions[action]?.();
 }
@@ -3915,6 +4010,13 @@ function openStudentDialog(trainingId = null, studentId = null) {
   studentForm.dataset.training = trainingId || "";
   studentForm.dataset.editing = studentId || "";
   dialog.showModal();
+}
+
+function closeStudentDialog() {
+  studentForm.reset();
+  studentForm.dataset.training = "";
+  studentForm.dataset.editing = "";
+  dialog.close();
 }
 
 function populateStudentForm(trainingId = null, studentId = null) {
@@ -3954,7 +4056,10 @@ function populateStudentForm(trainingId = null, studentId = null) {
 }
 
 function addStudentFromForm(event) {
-  if (event.submitter?.value === "cancel") return;
+  if (event.submitter?.value === "cancel") {
+    closeStudentDialog();
+    return;
+  }
   event.preventDefault();
   const form = new FormData(studentForm);
   const firstName = cleanText(form.get("firstName"), 60);
@@ -4137,6 +4242,70 @@ function addTraining() {
   render();
 }
 
+function addMinutesToTime(time, minutes) {
+  if (!timeIsValid(time)) return "20:00";
+  const [hours, mins] = time.split(":").map(Number);
+  const total = Math.min(23 * 60 + 59, hours * 60 + mins + minutes);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function openExtraTrainingDialog(trainingId) {
+  const baseTraining = byId(db.trainings, trainingId);
+  if (!baseTraining || !hasBranchAccess(baseTraining.branchId)) return toast("Нет доступа к тренировке");
+  if (!extraTrainingDialog || !extraTrainingForm) return toast("Окно дополнительной тренировки не найдено");
+  extraTrainingForm.dataset.baseTraining = trainingId;
+  extraTrainingForm.querySelector("[name=date]").value = baseTraining.date || TODAY;
+  extraTrainingForm.querySelector("[name=startTime]").value = baseTraining.startTime || "19:00";
+  extraTrainingForm.querySelector("[name=endTime]").value = baseTraining.endTime || addMinutesToTime(baseTraining.startTime || "19:00", 60);
+  extraTrainingDialog.showModal();
+}
+
+function saveExtraTrainingFromForm(event) {
+  event.preventDefault();
+  if (event.submitter?.value === "cancel") {
+    extraTrainingDialog.close();
+    return;
+  }
+  const baseTraining = byId(db.trainings, extraTrainingForm.dataset.baseTraining);
+  if (!baseTraining || !hasBranchAccess(baseTraining.branchId)) return toast("Нет доступа к тренировке");
+  const form = new FormData(extraTrainingForm);
+  const date = String(form.get("date") || "");
+  const startTime = String(form.get("startTime") || "");
+  const endTime = String(form.get("endTime") || "");
+  const month = date.slice(0, 7);
+  if (!AVAILABLE_MONTHS.includes(month)) return toast("Выберите месяц из календаря CRM");
+  if (!timeIsValid(startTime) || !timeIsValid(endTime)) return toast("Проверьте время тренировки");
+  if (startTime >= endTime) return toast("Конец тренировки должен быть позже начала");
+  const group = byId(db.groups, baseTraining.groupId) || byId(db.groups, ensureRosterGroup(baseTraining.branchId));
+  if (!group) return toast("Нет группы для тренировки");
+
+  const training = {
+    id: id("tr"),
+    date,
+    startTime,
+    endTime,
+    month,
+    branchId: baseTraining.branchId,
+    groupId: group.id,
+    trainerId: currentUser().id,
+    assistantId: null,
+    assistantConfirmed: false,
+    status: "PLANNED",
+    type: "EXTRA",
+    originalTrainingId: baseTraining.id,
+    deletedAt: null,
+    archivedAt: null
+  };
+  db.trainings.push(training);
+  db.coachFilters = { branchId: training.branchId, month };
+  db.coachSelectedTrainingId = training.id;
+  audit("Создана дополнительная тренировка тренером", `${branchName(training.branchId)} ${formatDate(date)} ${startTime}-${endTime}`);
+  extraTrainingDialog.close();
+  extraTrainingForm.reset();
+  saveData("Дополнительная тренировка добавлена");
+  render();
+}
+
 function changeTrainingTrainer(trainingId, trainerId) {
   const training = byId(db.trainings, trainingId);
   if (!training || !trainerId || training.trainerId === trainerId) return;
@@ -4207,12 +4376,16 @@ function reopenMonth(branchId) {
 
 async function saveSettings() {
   if (!isOwner()) return toast("Настройки и роли может менять только владелец");
-  const nextPrice = Number(document.getElementById("priceInput").value);
-  const nextDueDay = Number(document.getElementById("dueInput").value);
-  if (!Number.isFinite(nextPrice) || nextPrice < 0 || nextPrice > 10000) return toast("Проверьте стоимость тренировки");
-  if (!Number.isInteger(nextDueDay) || nextDueDay < 1 || nextDueDay > 28) return toast("Срок оплаты должен быть от 1 до 28");
-  db.settings.pricePerTraining = nextPrice;
-  db.settings.dueDay = nextDueDay;
+  const priceInput = document.getElementById("priceInput");
+  const dueInput = document.getElementById("dueInput");
+  if (priceInput || dueInput) {
+    const nextPrice = Number(priceInput?.value);
+    const nextDueDay = Number(dueInput?.value);
+    if (!Number.isFinite(nextPrice) || nextPrice < 0 || nextPrice > 10000) return toast("Проверьте стоимость тренировки");
+    if (!Number.isInteger(nextDueDay) || nextDueDay < 1 || nextDueDay > 28) return toast("Срок оплаты должен быть от 1 до 28");
+    db.settings.pricePerTraining = nextPrice;
+    db.settings.dueDay = nextDueDay;
+  }
   const usersForm = document.getElementById("usersSettingsForm");
   const allActiveBranchIds = db.branches.filter((branch) => !branch.deletedAt && !branch.archivedAt && branch.isActive).map((branch) => branch.id);
   if (usersForm) {
@@ -4246,8 +4419,55 @@ async function saveSettings() {
         .map((group) => group.id);
     }
   }
+  const scheduleForm = document.getElementById("scheduleSettingsForm");
+  const changedScheduleBranches = [];
+  if (scheduleForm) {
+    const weekOrder = [1, 2, 3, 4, 5, 6, 0];
+    for (const branch of db.branches.filter((item) => !item.deletedAt && !item.archivedAt && item.isActive)) {
+      const groupId = ensureRosterGroup(branch.id);
+      const nextSchedules = [];
+      for (const day of weekOrder) {
+        const activeInput = scheduleForm.querySelector(`[name="scheduleActive_${branch.id}_${day}"]`);
+        if (!activeInput?.checked) continue;
+        const start = scheduleForm.querySelector(`[name="scheduleStart_${branch.id}_${day}"]`)?.value || "";
+        const end = scheduleForm.querySelector(`[name="scheduleEnd_${branch.id}_${day}"]`)?.value || "";
+        if (!timeIsValid(start) || !timeIsValid(end)) {
+          return toast(`Проверьте время: ${branch.name}, ${weekdayFullName(day)}`);
+        }
+        if (start >= end) {
+          return toast(`Конец должен быть позже начала: ${branch.name}, ${weekdayFullName(day)}`);
+        }
+        nextSchedules.push({
+          id: `real_sch_${branch.id}_${day}_0`,
+          groupId,
+          weekday: day,
+          startTime: start,
+          endTime: end,
+          startsAt: "2026-07-01",
+          endsAt: null
+        });
+      }
+
+      const currentSchedules = db.schedules
+        .filter((schedule) => schedule.groupId === groupId && !schedule.endsAt)
+        .map((schedule) => `${schedule.weekday}|${schedule.startTime}|${schedule.endTime}`)
+        .sort()
+        .join(";");
+      const nextSignature = nextSchedules
+        .map((schedule) => `${schedule.weekday}|${schedule.startTime}|${schedule.endTime}`)
+        .sort()
+        .join(";");
+
+      if (currentSchedules !== nextSignature) {
+        db.schedules = db.schedules.filter((schedule) => schedule.groupId !== groupId);
+        db.schedules.push(...nextSchedules);
+        changedScheduleBranches.push(branch.id);
+      }
+    }
+  }
+  changedScheduleBranches.forEach((branchId) => rebuildBranchTrainingsFromSchedule(branchId));
   audit("Изменены настройки CRM", "стоимость, роли и филиалы пользователей");
-  saveData("Настройки сохранены. Пользователи и роли обновлены.");
+  saveData(changedScheduleBranches.length ? "Настройки и расписание сохранены" : "Настройки сохранены. Пользователи и роли обновлены.");
   render();
 }
 
@@ -4355,18 +4575,14 @@ globalSearch?.addEventListener("input", (event) => {
   render();
 });
 
-globalSearch?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  if (String(globalSearch.value || "").trim().toUpperCase() !== "СТОК") return;
-  event.preventDefault();
-  stockReset();
-});
-
 document.getElementById("quickAddBtn")?.addEventListener("click", () => openStudentDialog());
 document.getElementById("exportBtn")?.addEventListener("click", () => downloadExcelWorkbook());
-document.getElementById("stockBtn")?.addEventListener("click", () => stockReset());
+studentForm.querySelectorAll("[data-student-cancel]").forEach((button) => {
+  button.addEventListener("click", closeStudentDialog);
+});
 studentForm.addEventListener("submit", addStudentFromForm);
 assistantForm.addEventListener("submit", saveAssistantFromForm);
+extraTrainingForm?.addEventListener("submit", saveExtraTrainingFromForm);
 
 initializeApp();
 

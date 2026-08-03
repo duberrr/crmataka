@@ -783,6 +783,77 @@ tr:hover td { background: #fbfcfa; }
   padding: 7px 10px;
 }
 
+.icon-danger-btn {
+  min-width: 38px;
+  padding: 8px 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.settings-tabs-panel {
+  padding: 10px;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tab-btn {
+  min-height: 40px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.tab-btn.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.schedule-settings-panel {
+  grid-column: 1 / -1;
+}
+
+.schedule-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.schedule-week {
+  display: grid;
+  gap: 8px;
+}
+
+.schedule-day-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 120px 120px;
+  gap: 8px;
+  align-items: end;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.schedule-day-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: var(--ink);
+}
+
+.schedule-day-toggle input {
+  width: auto;
+  margin: 0;
+}
+
 .accordion-drop {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1417,6 +1488,9 @@ label input, label select, label textarea {
     padding: 8px 10px;
     font-size: 15px;
   }
+  .nav-item[data-view="trainings"] {
+    display: none;
+  }
   .role-card {
     margin-top: 8px;
   }
@@ -1443,6 +1517,10 @@ label input, label select, label textarea {
   }
   .workspace-frame:not(.excel-open) .excel-drawer {
     display: none;
+  }
+  .schedule-day-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 }
 
