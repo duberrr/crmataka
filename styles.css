@@ -816,6 +816,24 @@ tr:hover td { background: #fbfcfa; }
   color: #fff;
 }
 
+.danger-zone {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #f0b8b8;
+  border-radius: 8px;
+  background: #fff7f6;
+}
+
+.danger-zone p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .schedule-settings-panel {
   grid-column: 1 / -1;
 }
@@ -851,6 +869,29 @@ tr:hover td { background: #fbfcfa; }
 
 .schedule-day-toggle input {
   width: auto;
+  margin: 0;
+}
+
+.branch-detail-panel {
+  margin-top: 14px;
+}
+
+.branch-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.branch-schedule-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 12px;
+  margin: 4px 0 10px;
+}
+
+.branch-schedule-head h3 {
   margin: 0;
 }
 
