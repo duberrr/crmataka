@@ -204,6 +204,7 @@ const pageTitle = document.getElementById("pageTitle");
 const accountPanel = document.getElementById("accountPanel");
 const globalSearch = document.getElementById("globalSearch");
 const mobileMenuButton = document.getElementById("mobileMenuBtn");
+const mobileNavCloseButton = document.getElementById("mobileNavCloseBtn");
 const mobileNavBackdrop = document.getElementById("mobileNavBackdrop");
 const dialog = document.getElementById("studentDialog");
 const studentForm = document.getElementById("studentForm");
@@ -803,6 +804,7 @@ function normalizeTrainerAssignments() {
     }
   });
 
+  if (syncCoachAccessFromBranchTrainers()) changed = true;
   return changed;
 }
 
@@ -1054,6 +1056,118 @@ function activeCoachUsers() {
   return db.users
     .filter((user) => !user.deletedAt && user.role === "coach")
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
+function allActiveBranchIds() {
+  return db.branches
+    .filter((branch) => !branch.deletedAt && !branch.archivedAt && branch.isActive)
+    .map((branch) => branch.id);
+}
+
+function groupIdsForBranchIds(branchIds) {
+  return db.groups
+    .filter((group) => !group.deletedAt && !group.archivedAt && branchIds.includes(group.branchId))
+    .map((group) => group.id);
+}
+
+function setUserBranchAccess(user, branchIds) {
+  const uniqueBranchIds = [...new Set(branchIds.filter(Boolean))];
+  if (user.role === "owner") {
+    user.branchIds = allActiveBranchIds();
+    user.groupIds = groupIdsForBranchIds(user.branchIds);
+    return;
+  }
+  user.branchIds = uniqueBranchIds;
+  user.groupIds = groupIdsForBranchIds(uniqueBranchIds);
+}
+
+function assignBranchTrainer(branchId, trainerId, options = {}) {
+  const trainer = byId(db.users, trainerId);
+  if (!trainer || trainer.deletedAt || trainer.role !== "coach") return false;
+
+  let changed = false;
+  db.groups
+    .filter((group) => group.branchId === branchId && !group.deletedAt && !group.archivedAt)
+    .forEach((group) => {
+      if (group.trainerId !== trainerId) {
+        group.trainerId = trainerId;
+        changed = true;
+      }
+      if (group.assistantId === trainerId) {
+        group.assistantId = null;
+        changed = true;
+      }
+    });
+
+  db.trainings
+    .filter((training) => training.branchId === branchId && training.date >= TODAY && !training.deletedAt && !trainingHasMarks(training.id))
+    .forEach((training) => {
+      if (training.trainerId !== trainerId) {
+        training.trainerId = trainerId;
+        changed = true;
+      }
+      if (training.assistantId === trainerId) {
+        training.assistantId = null;
+        training.assistantConfirmed = false;
+        changed = true;
+      }
+    });
+
+  if (options.syncAccess !== false) {
+    activeCoachUsers().forEach((user) => {
+      const before = `${user.branchIds.join(",")}|${user.groupIds.join(",")}`;
+      const nextBranchIds = user.id === trainerId
+        ? [...new Set([...(user.branchIds || []), branchId])]
+        : (user.branchIds || []).filter((item) => item !== branchId);
+      setUserBranchAccess(user, nextBranchIds);
+      const after = `${user.branchIds.join(",")}|${user.groupIds.join(",")}`;
+      if (before !== after) changed = true;
+    });
+  }
+
+  return changed;
+}
+
+function syncBranchTrainersFromCoachAccess() {
+  let changed = false;
+  allActiveBranchIds().forEach((branchId) => {
+    const selectedCoach = activeCoachUsers().find((user) => (user.branchIds || []).includes(branchId));
+    if (selectedCoach) {
+      if (assignBranchTrainer(branchId, selectedCoach.id, { syncAccess: false })) changed = true;
+    }
+  });
+  if (syncCoachAccessFromBranchTrainers()) changed = true;
+  return changed;
+}
+
+function syncCoachAccessFromBranchTrainers() {
+  let changed = false;
+  const branchesByCoach = new Map(activeCoachUsers().map((user) => [user.id, []]));
+  allActiveBranchIds().forEach((branchId) => {
+    const group = db.groups.find((item) => item.branchId === branchId && !item.deletedAt && !item.archivedAt);
+    const trainer = byId(db.users, group?.trainerId);
+    if (trainer && !trainer.deletedAt && trainer.role === "coach") {
+      branchesByCoach.get(trainer.id)?.push(branchId);
+    }
+  });
+
+  activeCoachUsers().forEach((user) => {
+    const before = `${(user.branchIds || []).join(",")}|${(user.groupIds || []).join(",")}`;
+    setUserBranchAccess(user, branchesByCoach.get(user.id) || []);
+    const after = `${user.branchIds.join(",")}|${user.groupIds.join(",")}`;
+    if (before !== after) changed = true;
+  });
+
+  db.users
+    .filter((user) => !user.deletedAt && user.role === "owner")
+    .forEach((user) => {
+      const before = `${(user.branchIds || []).join(",")}|${(user.groupIds || []).join(",")}`;
+      setUserBranchAccess(user, allActiveBranchIds());
+      const after = `${user.branchIds.join(",")}|${user.groupIds.join(",")}`;
+      if (before !== after) changed = true;
+    });
+
+  return changed;
 }
 
 function fallbackCoachId() {
@@ -2540,7 +2654,7 @@ function viewCoachMode() {
             <h2>${formatDate(selected.date)} · ${selected.startTime}-${selected.endTime}</h2>
             <p>${branchName(selected.branchId)} · ${userName(selected.trainerId)}${selected.assistantConfirmed && selected.assistantId ? ` · помощник ${userName(selected.assistantId)}` : ""}</p>
           </div>
-          <div class="training-tools">${trainerChangeControl(selected)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", selected.id, "primary-btn")}${actionButton(selected.assistantConfirmed && selected.assistantId ? `Помощник: ${userName(selected.assistantId)}` : "Был помощник", "toggle-assistant", selected.id)}${actionButton("+ Доп. тренировка", "open-extra-training", selected.id)}</div></div>
+          <div class="training-tools">${trainerChangeControl(selected)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", selected.id, "primary-btn")}${actionButton(selected.assistantConfirmed && selected.assistantId ? `Помощник: ${userName(selected.assistantId)}` : "Был помощник", "toggle-assistant", selected.id)}${actionButton("+ Доп. тренировка", "open-extra-training", selected.id)}${actionButton("×", "delete-coach-training", selected.id, "danger-btn icon-danger-btn")}</div></div>
         </div>
         <div class="training-summary">
           <span><strong>${students.length}</strong> учеников</span>
@@ -3863,17 +3977,7 @@ function saveBranchDetails(branchId) {
   const trainer = byId(db.users, trainerId);
   if (!group || !trainer || trainer.deletedAt || trainer.role !== "coach") return toast("Выберите сотрудника с ролью Тренер");
 
-  db.groups
-    .filter((item) => item.branchId === branchId && !item.deletedAt && !item.archivedAt)
-    .forEach((item) => {
-      item.trainerId = trainerId;
-    });
-
-  db.trainings
-    .filter((training) => training.branchId === branchId && training.date >= TODAY && !training.deletedAt && !trainingHasMarks(training.id))
-    .forEach((training) => {
-      training.trainerId = trainerId;
-    });
+  assignBranchTrainer(branchId, trainerId);
 
   const weekOrder = [1, 2, 3, 4, 5, 6, 0];
   const nextSchedules = [];
@@ -4170,6 +4274,7 @@ function runAction(action, itemId) {
       saveData("Тренировка отменена");
       render();
     },
+    "delete-coach-training": () => deleteCoachTraining(itemId),
     "delete-training": () => deleteEntity("training", itemId),
     "generate-charges": () => generateChargesBase(),
     "generate-base-charges": () => generateChargesBase(),
@@ -4442,6 +4547,22 @@ function addTraining() {
   render();
 }
 
+function deleteCoachTraining(trainingId) {
+  const training = byId(db.trainings, trainingId);
+  if (!training || training.deletedAt) return toast("Тренировка не найдена");
+  if (!hasBranchAccess(training.branchId)) return toast("Нет доступа к тренировке");
+  const title = `${formatDate(training.date)} ${training.startTime}-${training.endTime} · ${branchName(training.branchId)}`;
+  if (!confirm(`Удалить тренировку: ${title}?`)) return;
+  training.deletedAt = nowText();
+  db.attendance = db.attendance.filter((item) => item.trainingId !== training.id);
+  if (db.coachSelectedTrainingId === training.id) db.coachSelectedTrainingId = null;
+  if (db.selectedTrainingId === training.id) db.selectedTrainingId = null;
+  db.deleted.unshift({ id: id("del"), type: "training", typeLabel: "Тренировка", itemId: training.id, title, deletedAt: nowText(), deletedBy: currentUser().id });
+  audit("Удалена тренировка", title);
+  saveData("Тренировка удалена");
+  render();
+}
+
 function addMinutesToTime(time, minutes) {
   if (!timeIsValid(time)) return "20:00";
   const [hours, mins] = time.split(":").map(Number);
@@ -4593,7 +4714,7 @@ async function saveSettings() {
     db.settings.dueDay = nextDueDay;
   }
   const usersForm = document.getElementById("usersSettingsForm");
-  const allActiveBranchIds = db.branches.filter((branch) => !branch.deletedAt && !branch.archivedAt && branch.isActive).map((branch) => branch.id);
+  const activeBranchIds = allActiveBranchIds();
   if (usersForm) {
     const selectedOwnerCount = db.users.filter((user) => {
       const roleInput = usersForm.querySelector(`[name="userRole_${user.id}"]`);
@@ -4619,11 +4740,9 @@ async function saveSettings() {
       if (nextLogin && !db.users.some((item) => item.id !== user.id && item.login === nextLogin)) user.login = nextLogin;
       if (nextPassword) await setUserPassword(user, nextPassword);
       user.role = nextRole;
-      user.branchIds = nextBranchIds.length ? nextBranchIds : [...allActiveBranchIds];
-      user.groupIds = db.groups
-        .filter((group) => !group.deletedAt && !group.archivedAt && user.branchIds.includes(group.branchId))
-        .map((group) => group.id);
+      setUserBranchAccess(user, nextRole === "owner" ? activeBranchIds : nextBranchIds);
     }
+    syncBranchTrainersFromCoachAccess();
   }
   const scheduleForm = document.getElementById("scheduleSettingsForm");
   const changedScheduleBranches = [];
@@ -4679,7 +4798,6 @@ async function saveSettings() {
 
 async function addUserAccount() {
   if (!isOwner()) return toast("Добавлять роли может только владелец");
-  const allActiveBranchIds = db.branches.filter((branch) => !branch.deletedAt && !branch.archivedAt && branch.isActive).map((branch) => branch.id);
   const login = generateLogin();
   const password = generatePassword();
   const user = {
@@ -4687,8 +4805,8 @@ async function addUserAccount() {
     name: "Новый сотрудник",
     login,
     role: "coach",
-    branchIds: [...allActiveBranchIds],
-    groupIds: db.groups.filter((group) => !group.deletedAt && !group.archivedAt && allActiveBranchIds.includes(group.branchId)).map((group) => group.id)
+    branchIds: [],
+    groupIds: []
   };
   await setUserPassword(user, password);
   db.users.push(user);
@@ -4769,6 +4887,7 @@ mobileMenuButton?.addEventListener("click", () => {
 });
 
 mobileNavBackdrop?.addEventListener("click", () => setMobileNav(false));
+mobileNavCloseButton?.addEventListener("click", () => setMobileNav(false));
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") setMobileNav(false);
