@@ -36,7 +36,7 @@ button {
 button, input, select, textarea { max-width: 100%; }
 img { max-width: 100%; }
 h1, h2, h3, p, td, th, strong, span, small, label {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .app-shell {
@@ -86,7 +86,7 @@ h1, h2, h3, p, td, th, strong, span, small, label {
 
 .brand strong, .brand span { display: block; }
 .brand div { min-width: 0; }
-.brand strong, .brand span { overflow-wrap: anywhere; }
+.brand strong, .brand span { overflow-wrap: break-word; }
 .brand span { color: #aebbb3; font-size: 13px; margin-top: 3px; }
 
 .sidebar-close {
@@ -208,7 +208,7 @@ h1, h2, h3, p, td, th, strong, span, small, label {
 
 .topbar-title h1,
 .topbar-title p {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .mobile-menu-btn,
@@ -599,7 +599,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .panel-head h2,
 .panel-head p {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .panel-head p { margin: 6px 0 0; color: var(--muted); line-height: 1.5; }
@@ -968,36 +968,126 @@ tr:hover td { background: #fbfcfa; }
 
 .schedule-settings {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .schedule-week {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
 }
 
 .schedule-day-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) 120px 120px;
-  gap: 8px;
-  align-items: end;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
+  gap: 12px;
+  min-height: 126px;
+  padding: 12px;
+  border: 1px solid #d8e4dc;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fcf9 100%);
+  box-shadow: 0 8px 22px rgba(20, 32, 26, .045);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease, background-color .16s ease;
 }
 
-.schedule-day-toggle {
+.schedule-day-row:hover {
+  transform: translateY(-1px);
+  border-color: #bdcfbf;
+  box-shadow: 0 12px 28px rgba(20, 32, 26, .07);
+}
+
+.schedule-day-row.is-active,
+.schedule-day-row:has(.schedule-switch input:checked) {
+  border-color: rgba(29, 143, 85, .35);
+  background: linear-gradient(180deg, #ffffff 0%, #f0faf4 100%);
+  box-shadow: 0 12px 30px rgba(29, 143, 85, .1);
+}
+
+.schedule-day-main {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
+  gap: 10px;
   color: var(--ink);
 }
 
-.schedule-day-toggle input {
-  width: auto;
+.schedule-day-main strong {
+  display: block;
+  font-size: 14px;
+}
+
+.schedule-day-main small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.schedule-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+}
+
+.schedule-switch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
   margin: 0;
+  cursor: pointer;
+}
+
+.schedule-switch span {
+  position: absolute;
+  inset: 0;
+  border: 1px solid #cfdcd2;
+  border-radius: 999px;
+  background: #edf3ee;
+  box-shadow: inset 0 1px 2px rgba(20, 32, 26, .08);
+  transition: background-color .16s ease, border-color .16s ease;
+}
+
+.schedule-switch span::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(20, 32, 26, .18);
+  transition: transform .16s ease;
+}
+
+.schedule-switch input:checked + span {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.schedule-switch input:checked + span::after {
+  transform: translateX(18px);
+}
+
+.schedule-time-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.schedule-time-pair label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.schedule-time-pair input {
+  min-height: 38px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: #fff;
 }
 
 .branch-detail-panel {
@@ -1024,20 +1114,27 @@ tr:hover td { background: #fbfcfa; }
 }
 
 .accordion-drop {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f9fbf8;
+  border: 1px solid #d7e3da;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbf8 100%);
   overflow: hidden;
+  box-shadow: 0 8px 22px rgba(20, 32, 26, .04);
 }
 
 .accordion-drop summary {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  min-height: 50px;
+  padding: 12px 14px;
   cursor: pointer;
   list-style: none;
   user-select: none;
+  transition: background-color .16s ease;
+}
+
+.accordion-drop summary:hover {
+  background: #f1f7f2;
 }
 
 .accordion-drop summary::-webkit-details-marker {
@@ -1045,13 +1142,19 @@ tr:hover td { background: #fbfcfa; }
 }
 
 .accordion-drop summary span {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
 }
 
 .accordion-drop summary strong {
   margin-left: auto;
-  padding-right: 4px;
+  padding: 5px 9px;
+  border: 1px solid #dce9df;
+  border-radius: 999px;
+  background: #eef6ef;
+  color: var(--accent);
+  font-size: 12px;
 }
 
 .accordion-drop summary::before {
@@ -1064,6 +1167,10 @@ tr:hover td { background: #fbfcfa; }
 
 .accordion-drop[open] summary::before {
   transform: rotate(180deg);
+}
+
+.accordion-drop summary::before {
+  content: "\25BE";
 }
 
 .accordion-body {
@@ -1354,13 +1461,13 @@ tr:hover td { background: #fbfcfa; }
 .coach-training-head h2 {
   margin: 4px 0 6px;
   line-height: 1.15;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .coach-training-head p:not(.eyebrow) {
   margin: 6px 0 0;
   color: var(--muted);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .coach-student-row {
@@ -1380,6 +1487,11 @@ tr:hover td { background: #fbfcfa; }
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
+  min-width: 0;
+}
+
+.training-head > div:first-child {
+  min-width: 0;
 }
 
 .training-head p:not(.eyebrow) {
@@ -1393,6 +1505,21 @@ tr:hover td { background: #fbfcfa; }
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: min(100%, 420px);
+  max-width: 560px;
+}
+
+.training-tools .split-actions,
+.coach-training-head .training-tools .split-actions {
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.training-tools .primary-btn,
+.training-tools .ghost-btn,
+.training-tools .danger-btn {
+  min-height: 36px;
+  padding: 8px 11px;
 }
 
 .trainer-change {
@@ -1464,7 +1591,7 @@ tr:hover td { background: #fbfcfa; }
 .attendance-person strong,
 .attendance-person span {
   display: block;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   white-space: normal;
 }
 

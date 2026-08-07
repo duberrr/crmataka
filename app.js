@@ -1046,6 +1046,28 @@ function branchScheduleMap(branchId) {
   return map;
 }
 
+function scheduleDayEditor(day, schedule, names) {
+  const isActive = Boolean(schedule);
+  return `
+    <div class="schedule-day-row ${isActive ? "is-active" : ""}">
+      <div class="schedule-day-main">
+        <label class="schedule-switch" title="Включить тренировку">
+          <input type="checkbox" name="${escapeHtml(names.active)}" ${isActive ? "checked" : ""}>
+          <span aria-hidden="true"></span>
+        </label>
+        <div>
+          <strong>${weekdayFullName(day)}</strong>
+          <small>${isActive ? "Тренировка включена" : "Без тренировки"}</small>
+        </div>
+      </div>
+      <div class="schedule-time-pair">
+        <label><span>Начало</span><input type="time" name="${escapeHtml(names.start)}" value="${escapeHtml(schedule?.startTime || "")}"></label>
+        <label><span>Конец</span><input type="time" name="${escapeHtml(names.end)}" value="${escapeHtml(schedule?.endTime || "")}"></label>
+      </div>
+    </div>
+  `;
+}
+
 function trainerOptions(selectedId = "") {
   return activeCoachUsers()
     .map((user) => `<option value="${escapeHtml(user.id)}" ${user.id === selectedId ? "selected" : ""}>${escapeHtml(user.name)} · ${escapeHtml(labels[user.role] || "Тренер")}</option>`)
@@ -2506,16 +2528,11 @@ function branchDetailsPanel(branch) {
         <div class="schedule-week">
           ${weekOrder.map((day) => {
             const schedule = scheduleMap.get(day);
-            return `
-              <div class="schedule-day-row">
-                <label class="schedule-day-toggle">
-                  <input type="checkbox" name="branchScheduleActive_${day}" ${schedule ? "checked" : ""}>
-                  <span>${weekdayFullName(day)}</span>
-                </label>
-                <label>Начало<input type="time" name="branchScheduleStart_${day}" value="${escapeHtml(schedule?.startTime || "")}"></label>
-                <label>Конец<input type="time" name="branchScheduleEnd_${day}" value="${escapeHtml(schedule?.endTime || "")}"></label>
-              </div>
-            `;
+            return scheduleDayEditor(day, schedule, {
+              active: `branchScheduleActive_${day}`,
+              start: `branchScheduleStart_${day}`,
+              end: `branchScheduleEnd_${day}`
+            });
           }).join("")}
         </div>
         <div class="split-actions">
@@ -2729,7 +2746,7 @@ function calendarDropdown(trainings, selected, month) {
           <strong>${db.showCalendar ? "▲" : "▼"}</strong>
         </span>
       </button>
-      <div class="split-actions">${isOwner() ? actionButton("Создать месяц", "create-month", month, "primary-btn") : ""}${actionButton("+ Дополнительная", "add-training", "new")}</div>
+      <div class="split-actions">${isOwner() ? actionButton("Создать месяц", "create-month", month, "primary-btn") : ""}</div>
     </div>
     ${db.showCalendar ? `<div class="calendar-scroll">
       ${trainings.map((training) => {
@@ -2959,7 +2976,7 @@ function attendancePanel(training, trainings = [], month = db.filters.month) {
         <h2>${formatDate(training.date)} · ${training.startTime}-${training.endTime}</h2>
         <p>${branchName(training.branchId)} · ${userName(training.trainerId)}${training.assistantConfirmed && training.assistantId ? ` · помощник ${userName(training.assistantId)}` : ""}</p>
       </div>
-      <div class="training-tools">${trainerChangeControl(training)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", training.id, "primary-btn")}${actionButton(training.assistantConfirmed && training.assistantId ? `Помощник: ${userName(training.assistantId)}` : "Был помощник", "toggle-assistant", training.id)}${actionButton("Завершить", "finish-training", training.id)}</div></div>
+      <div class="training-tools">${trainerChangeControl(training)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", training.id, "primary-btn")}${actionButton(training.assistantConfirmed && training.assistantId ? `Помощник: ${userName(training.assistantId)}` : "Был помощник", "toggle-assistant", training.id)}${actionButton("+ Доп. тренировка", "open-extra-training", training.id)}${actionButton("Завершить", "finish-training", training.id)}${actionButton("×", "delete-coach-training", training.id, "danger-btn icon-danger-btn")}</div></div>
     </div>
     <div class="training-summary">
       <span><strong>${students.length}</strong> учеников</span>
@@ -3277,16 +3294,11 @@ function viewSettings() {
                   <div class="accordion-body schedule-week">
                     ${weekOrder.map((day) => {
                       const schedule = scheduleMap.get(day);
-                      return `
-                        <div class="schedule-day-row">
-                          <label class="schedule-day-toggle">
-                            <input type="checkbox" name="scheduleActive_${branch.id}_${day}" ${schedule ? "checked" : ""}>
-                            <span>${weekdayFullName(day)}</span>
-                          </label>
-                          <label>Начало<input type="time" name="scheduleStart_${branch.id}_${day}" value="${escapeHtml(schedule?.startTime || "")}"></label>
-                          <label>Конец<input type="time" name="scheduleEnd_${branch.id}_${day}" value="${escapeHtml(schedule?.endTime || "")}"></label>
-                        </div>
-                      `;
+                      return scheduleDayEditor(day, schedule, {
+                        active: `scheduleActive_${branch.id}_${day}`,
+                        start: `scheduleStart_${branch.id}_${day}`,
+                        end: `scheduleEnd_${branch.id}_${day}`
+                      });
                     }).join("")}
                   </div>
                 </details>
@@ -4247,7 +4259,12 @@ function runAction(action, itemId) {
     "edit-student": () => openStudentDialog(null, itemId),
     "archive-student": () => archiveStudent(itemId),
     "delete-student": () => deleteEntity("student", itemId),
-    "select-branch": () => { db.selectedBranchId = itemId; saveData(); render(); },
+    "select-branch": () => {
+      db.selectedBranchId = itemId;
+      saveData();
+      render();
+      document.querySelector(".branch-detail-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
     "filter-branch": () => { db.filters.branchId = itemId; db.filters.groupId = "all"; db.activeView = "students"; saveData(); render(); },
     "filter-group": () => { db.filters.groupId = itemId; db.activeView = "students"; saveData(); render(); },
     "group-trainings": () => { db.filters.groupId = itemId; db.activeView = "trainings"; saveData(); render(); },
