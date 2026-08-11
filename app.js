@@ -2380,6 +2380,7 @@ async function loadRemoteStateAfterSignIn(login = "", options = {}) {
   if (!window.AtakaRemote?.isReady?.() || !window.AtakaRemote?.isSignedIn?.()) return false;
   remoteBootstrapping = true;
   try {
+    await window.AtakaRemote.refreshSession?.();
     const remoteState = await window.AtakaRemote.loadState();
     const hasRemote = Boolean(remoteState && Object.keys(remoteState).length);
     const changed = applyRemoteState(remoteState);
@@ -2392,7 +2393,7 @@ async function loadRemoteStateAfterSignIn(login = "", options = {}) {
     return options.returnChanged ? changed : hasRemote;
   } catch (error) {
     console.error(error);
-    if (!options.silent) toast("Не удалось загрузить общую базу");
+    if (!options.silent && !options.allowOffline) toast("Не удалось загрузить общую базу");
     return false;
   } finally {
     remoteBootstrapping = false;
@@ -2410,7 +2411,7 @@ function startRemoteRefresh() {
 
 async function initializeApp() {
   if (window.AtakaRemote?.isReady?.() && window.AtakaRemote?.isSignedIn?.()) {
-    await loadRemoteStateAfterSignIn();
+    await loadRemoteStateAfterSignIn("", { allowOffline: true });
     startRemoteRefresh();
   }
   render();
@@ -4317,6 +4318,7 @@ function runAction(action, itemId) {
       db.coachSelectedTrainingId = training.id;
       saveData();
       render();
+      document.querySelector(".coach-attendance-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     },
     "trial-message": () => copyText(trialMessage(itemId), "Сообщение после пробной скопировано"),
     "payment-message": () => copyText(paymentMessage(itemId), "Сообщение об оплате скопировано"),

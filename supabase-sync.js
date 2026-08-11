@@ -3,6 +3,7 @@
   const TOKEN_KEY = "ataka-crm-supabase-token";
   const REFRESH_KEY = "ataka-crm-supabase-refresh";
   const LAST_REMOTE_KEY = "ataka-crm-last-remote-at";
+  const REQUEST_TIMEOUT_MS = 12000;
   const PART_PREFIX = "part:";
   const META_PART = "meta";
   const STATE_PARTS = [
@@ -68,6 +69,10 @@
     return localStorage.getItem(TOKEN_KEY) || "";
   }
 
+  function refreshToken() {
+    return localStorage.getItem(REFRESH_KEY) || "";
+  }
+
   function authHeaders() {
     return {
       "apikey": CONFIG.anonKey,
@@ -92,12 +97,40 @@
     return String(rowId || "").startsWith(PART_PREFIX) ? String(rowId).slice(PART_PREFIX.length) : "";
   }
 
-  async function request(path, options = {}) {
+  async function refreshSession() {
+    const savedRefresh = refreshToken();
+    if (!isReady() || !savedRefresh) return false;
+    const response = await fetch(`${cleanUrl()}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: {
+        "apikey": CONFIG.anonKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ refresh_token: savedRefresh })
+    });
+    if (!response.ok) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+      return false;
+    }
+    const data = await response.json();
+    localStorage.setItem(TOKEN_KEY, data.access_token);
+    if (data.refresh_token) localStorage.setItem(REFRESH_KEY, data.refresh_token);
+    return true;
+  }
+
+  async function request(path, options = {}, retry = true) {
     if (!isReady()) throw new Error("Supabase не настроен");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     const response = await fetch(`${cleanUrl()}${path}`, {
       ...options,
+      signal: options.signal || controller.signal,
       headers: { ...authHeaders(), ...(options.headers || {}) }
-    });
+    }).finally(() => clearTimeout(timer));
+    if ((response.status === 401 || response.status === 403) && retry && await refreshSession()) {
+      return request(path, options, false);
+    }
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || `Supabase error ${response.status}`);
@@ -138,7 +171,7 @@
   }
 
   function isSignedIn() {
-    return Boolean(token());
+    return Boolean(token() || refreshToken());
   }
 
   function splitState(state) {
@@ -178,19 +211,16 @@
 
   async function loadState() {
     if (!isReady() || !isSignedIn()) return null;
-    const rows = await request("/rest/v1/app_state?select=id,data,updated_at", {
+    const partRows = await request("/rest/v1/app_state?id=like.part%3A%25&select=id,data,updated_at", {
       headers: { "Accept": "application/json" }
     });
-    if (!Array.isArray(rows) || !rows.length) return null;
-
-    const partRows = rows.filter((row) => partFromRowId(row.id));
-    if (partRows.length) {
+    if (Array.isArray(partRows) && partRows.length) {
       const parts = {};
       partRows.forEach((row) => {
         const part = partFromRowId(row.id);
         if (STATE_PARTS.includes(part)) parts[part] = row.data;
       });
-      const newest = rows
+      const newest = partRows
         .map((row) => row.updated_at || "")
         .sort()
         .pop() || "";
@@ -200,7 +230,10 @@
       return joinParts(parts);
     }
 
-    const main = rows.find((row) => row.id === "main");
+    const mainRows = await request("/rest/v1/app_state?id=eq.main&select=id,data,updated_at", {
+      headers: { "Accept": "application/json" }
+    });
+    const main = Array.isArray(mainRows) ? mainRows[0] : null;
     if (!main?.data || !Object.keys(main.data).length) return null;
     localStorage.setItem(LAST_REMOTE_KEY, main.updated_at || "");
     const parts = splitState(main.data);
@@ -313,6 +346,7 @@
     isSignedIn,
     signIn,
     signOut,
+    refreshSession,
     loadState,
     saveState
   };
