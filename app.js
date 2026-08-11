@@ -146,6 +146,7 @@ const defaultData = {
 
 let db = loadData();
 let remoteBootstrapping = false;
+let remoteRefreshTimer = null;
 syncBranchNames();
 syncRealRoster();
 syncRealSchedule();
@@ -2242,6 +2243,7 @@ async function loginUser(login, password) {
     createLocalSession(user.id, normalizedLogin);
     if (!canSeeView(db.activeView)) db.activeView = "today";
     saveData("Вход выполнен через общую базу");
+    startRemoteRefresh();
     render();
     return;
   }
@@ -2276,6 +2278,10 @@ async function loginUser(login, password) {
 function logoutUser() {
   const token = localStorage.getItem(SESSION_KEY);
   if (token && db.security?.sessions) delete db.security.sessions[token];
+  if (remoteRefreshTimer) {
+    clearInterval(remoteRefreshTimer);
+    remoteRefreshTimer = null;
+  }
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(SESSION_LOGIN_KEY);
   window.AtakaRemote?.signOut?.();
@@ -2300,7 +2306,7 @@ function applyRemoteState(state) {
   return true;
 }
 
-async function loadRemoteStateAfterSignIn(login = "") {
+async function loadRemoteStateAfterSignIn(login = "", options = {}) {
   if (!window.AtakaRemote?.isReady?.() || !window.AtakaRemote?.isSignedIn?.()) return false;
   remoteBootstrapping = true;
   try {
@@ -2315,16 +2321,26 @@ async function loadRemoteStateAfterSignIn(login = "") {
     return hadRemote;
   } catch (error) {
     console.error(error);
-    toast("Не удалось загрузить общую базу");
+    if (!options.silent) toast("Не удалось загрузить общую базу");
     return false;
   } finally {
     remoteBootstrapping = false;
   }
 }
 
+function startRemoteRefresh() {
+  if (remoteRefreshTimer || !window.AtakaRemote?.isReady?.()) return;
+  remoteRefreshTimer = setInterval(async () => {
+    if (!window.AtakaRemote?.isSignedIn?.() || remoteBootstrapping) return;
+    const changed = await loadRemoteStateAfterSignIn("", { silent: true });
+    if (changed) render();
+  }, 12000);
+}
+
 async function initializeApp() {
   if (window.AtakaRemote?.isReady?.() && window.AtakaRemote?.isSignedIn?.()) {
     await loadRemoteStateAfterSignIn();
+    startRemoteRefresh();
   }
   render();
 }

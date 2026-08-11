@@ -226,12 +226,20 @@
   }
 
   function mergeArrayPart(baseValue, currentValue, remoteValue) {
+    const hasBase = baseValue !== undefined;
     const base = Array.isArray(baseValue) ? baseValue : [];
     const current = Array.isArray(currentValue) ? currentValue : [];
     const remote = Array.isArray(remoteValue) ? remoteValue : [];
     const baseById = new Map(base.filter((item) => item?.id).map((item) => [item.id, item]));
     const currentById = new Map(current.filter((item) => item?.id).map((item) => [item.id, item]));
     const mergedById = new Map(remote.filter((item) => item?.id).map((item) => [item.id, item]));
+
+    if (!hasBase && remote.length) {
+      currentById.forEach((item, itemId) => {
+        if (!mergedById.has(itemId)) mergedById.set(itemId, item);
+      });
+      return Array.from(mergedById.values());
+    }
 
     currentById.forEach((item, itemId) => {
       const baseItem = baseById.get(itemId);
@@ -271,7 +279,7 @@
 
       for (const part of changedParts) {
         let data = parts[part];
-        if (!needsPartMigration && ARRAY_PARTS.has(part)) {
+        if (ARRAY_PARTS.has(part)) {
           const remoteData = await loadPart(part);
           if (remoteData !== undefined) {
             data = mergeArrayPart(lastSavedParts[part], parts[part], remoteData);
