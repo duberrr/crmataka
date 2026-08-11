@@ -8,6 +8,51 @@ const PASSWORD_VERSION = "sha256-v1";
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 5 * 60 * 1000;
 const SUPABASE_LOGIN_DOMAIN = "ataka.local";
+const LOCAL_UI_KEYS = [
+  "currentUserId",
+  "activeView",
+  "settingsTab",
+  "selectedBranchId",
+  "query",
+  "filters",
+  "trainingFilters",
+  "coachFilters",
+  "financeFilters",
+  "paymentFilters",
+  "messageFilters",
+  "excelMonth",
+  "excelBranchId",
+  "selectedTrainingId",
+  "coachSelectedTrainingId",
+  "showTrainingPicker",
+  "showCalendar"
+];
+const SHARED_STATE_KEYS = [
+  "settings",
+  "users",
+  "branches",
+  "groups",
+  "schedules",
+  "students",
+  "parents",
+  "enrollments",
+  "trainings",
+  "attendance",
+  "charges",
+  "payments",
+  "allocations",
+  "credits",
+  "debts",
+  "monthClosings",
+  "openedBranchMonths",
+  "deleted",
+  "archive",
+  "auditLog",
+  "scheduleVersion",
+  "realRosterVersion",
+  "assistantRuleVersion",
+  "historyResetVersion"
+];
 
 function todayIso() {
   const now = new Date();
@@ -836,6 +881,28 @@ function remoteSafeData(state) {
   const copy = clone(state);
   copy.security = { loginFailures: {} };
   return copy;
+}
+
+function localUiState(state = db) {
+  const ui = {};
+  LOCAL_UI_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(state, key)) ui[key] = clone(state[key]);
+  });
+  return ui;
+}
+
+function restoreLocalUi(state, ui) {
+  Object.entries(ui || {}).forEach(([key, value]) => {
+    state[key] = clone(value);
+  });
+}
+
+function sharedStateSignature(state = db) {
+  const shared = {};
+  SHARED_STATE_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(state, key)) shared[key] = state[key];
+  });
+  return JSON.stringify(shared);
 }
 
 function toast(message) {
@@ -2291,7 +2358,10 @@ function logoutUser() {
 
 function applyRemoteState(state) {
   if (!state || !Object.keys(state).length) return false;
+  const ui = localUiState();
+  const before = sharedStateSignature();
   db = { ...clone(defaultData), ...state };
+  restoreLocalUi(db, ui);
   db.security ||= { loginFailures: {}, sessions: {} };
   syncBranchNames();
   syncRealRoster();
@@ -2303,7 +2373,7 @@ function applyRemoteState(state) {
   normalizeUserAccounts();
   if (normalizeTrainerAssignments()) saveData();
   sanitizeStoredData();
-  return true;
+  return before !== sharedStateSignature();
 }
 
 async function loadRemoteStateAfterSignIn(login = "", options = {}) {
@@ -2311,14 +2381,15 @@ async function loadRemoteStateAfterSignIn(login = "", options = {}) {
   remoteBootstrapping = true;
   try {
     const remoteState = await window.AtakaRemote.loadState();
-    const hadRemote = applyRemoteState(remoteState);
-    if (!hadRemote) {
+    const hasRemote = Boolean(remoteState && Object.keys(remoteState).length);
+    const changed = applyRemoteState(remoteState);
+    if (!hasRemote) {
       const owner = db.users.find((user) => user.role === "owner" && !user.deletedAt);
       if (owner && login) owner.login = login;
       window.AtakaRemote.saveState(remoteSafeData(db));
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-    return hadRemote;
+    return options.returnChanged ? changed : hasRemote;
   } catch (error) {
     console.error(error);
     if (!options.silent) toast("Не удалось загрузить общую базу");
@@ -2332,7 +2403,7 @@ function startRemoteRefresh() {
   if (remoteRefreshTimer || !window.AtakaRemote?.isReady?.()) return;
   remoteRefreshTimer = setInterval(async () => {
     if (!window.AtakaRemote?.isSignedIn?.() || remoteBootstrapping) return;
-    const changed = await loadRemoteStateAfterSignIn("", { silent: true });
+    const changed = await loadRemoteStateAfterSignIn("", { silent: true, returnChanged: true });
     if (changed) render();
   }, 12000);
 }
