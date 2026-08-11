@@ -205,7 +205,16 @@
     localStorage.setItem(LAST_REMOTE_KEY, main.updated_at || "");
     const parts = splitState(main.data);
     rememberParts(parts);
-    needsPartMigration = true;
+    needsPartMigration = false;
+    try {
+      for (const part of STATE_PARTS) {
+        await upsertPart(part, parts[part]);
+        lastSavedParts[part] = clone(parts[part]);
+      }
+    } catch (error) {
+      console.error("Не удалось перенести CRM на раздельное хранение", error);
+      needsPartMigration = true;
+    }
     return main.data;
   }
 
