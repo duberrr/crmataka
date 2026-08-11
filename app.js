@@ -825,7 +825,9 @@ function ensureRosterGroup(branchId) {
     deletedAt: null
   });
   db.users.forEach((user) => {
-    if (["owner"].includes(user.role) && !user.groupIds.includes(groupId)) user.groupIds.push(groupId);
+    if (user.role !== "owner") return;
+    if (!user.branchIds.includes(branchId)) user.branchIds.push(branchId);
+    if (!user.groupIds.includes(groupId)) user.groupIds.push(groupId);
   });
   return groupId;
 }
@@ -4636,14 +4638,25 @@ function showStudentCard(studentId) {
 }
 
 function addBranch() {
+  if (!isOwner()) return toast("Филиал может добавить только владелец");
   const name = cleanText(prompt("Название филиала"), 120);
   if (!name) return;
   const branch = { id: id("br"), name, address: "Указать адрес", isActive: true, archivedAt: null, deletedAt: null };
   db.branches.push(branch);
-  currentUser().branchIds.push(branch.id);
+  const groupId = ensureRosterGroup(branch.id);
+  const trainerId = fallbackCoachId();
+  if (trainerId) assignBranchTrainer(branch.id, trainerId);
+  db.users.forEach((user) => {
+    if (user.role !== "owner") return;
+    if (!user.branchIds.includes(branch.id)) user.branchIds.push(branch.id);
+    if (!user.groupIds.includes(groupId)) user.groupIds.push(groupId);
+  });
+  db.selectedBranchId = branch.id;
+  db.activeView = "branches";
   audit("Создан филиал", name);
-  saveData("Филиал добавлен");
+  saveData("Филиал добавлен. Заполните расписание и сохраните филиал");
   render();
+  setTimeout(() => document.querySelector(".branch-detail-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
 }
 
 function addGroup() {
