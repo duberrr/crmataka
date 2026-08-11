@@ -253,6 +253,14 @@ function syncBranchNames() {
 }
 
 function syncRealRoster() {
+  const rosterVersion = "real-roster-branches-2026-07-17";
+  if (db.realRosterVersion === rosterVersion) return;
+  if (db.students.some((student) => String(student.id || "").startsWith("real_"))) {
+    db.realRosterVersion = rosterVersion;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    return;
+  }
+
   const demoStudentIds = ["s1", "s2", "s3", "s4", "s5", "s6"];
   const demoParentIds = ["p1", "p2", "p3", "p4", "p5", "p6"];
   const demoChargeIds = db.charges.filter((charge) => demoStudentIds.includes(charge.studentId)).map((charge) => charge.id);
@@ -468,12 +476,19 @@ function syncRealRoster() {
     });
   });
 
+  db.realRosterVersion = rosterVersion;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
 
 function syncRealSchedule() {
   const scheduleVersion = "real-schedule-aug-nov-2026-v2";
   if (db.scheduleVersion === scheduleVersion) return;
+
+  if (Array.isArray(db.schedules) && db.schedules.length) {
+    db.scheduleVersion = scheduleVersion;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    return;
+  }
 
   db.schedules = [];
   db.trainings = [];
