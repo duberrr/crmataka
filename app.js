@@ -203,6 +203,7 @@ normalizeOwnerRole();
 normalizeUserAccounts();
 if (normalizeTrainerAssignments()) saveData();
 if (sanitizeStoredData()) saveData();
+if (normalizeStudentIdentityFields()) saveData();
 migrateStoredPlainPasswords();
 
 const labels = {
@@ -731,6 +732,27 @@ function sanitizeStoredData() {
   return changed;
 }
 
+function normalizeStudentIdentityFields() {
+  let changed = false;
+  db.students.forEach((student) => {
+    const firstName = String(student.firstName || "").trim();
+    const lastName = String(student.lastName || "").trim();
+    if (!lastName) {
+      const parts = firstName.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        student.lastName = parts[0];
+        student.firstName = parts.slice(1).join(" ");
+        changed = true;
+      }
+    }
+    if (!student.birthDate && Number(student.birthYear) > 1900) {
+      student.birthDate = `${Number(student.birthYear)}-01-01`;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
 async function migrateStoredPlainPasswords() {
   let changed = false;
   for (const user of db.users) {
@@ -1080,7 +1102,45 @@ function groupName(groupId) {
 
 function studentName(studentId) {
   const student = byId(db.students, studentId);
-  return student ? escapeHtml(`${student.firstName} ${student.lastName}`.trim()) : "Ученик не найден";
+  return student ? escapeHtml(studentDisplayName(student)) : "Ученик не найден";
+}
+
+function splitStudentName(student) {
+  const firstName = String(student?.firstName || "").trim();
+  const lastName = String(student?.lastName || "").trim();
+  if (lastName) return { firstName, lastName };
+  const parts = firstName.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return { lastName: parts[0], firstName: parts.slice(1).join(" ") };
+  return { firstName, lastName };
+}
+
+function studentDisplayName(student) {
+  const parts = splitStudentName(student);
+  return [parts.lastName, parts.firstName].filter(Boolean).join(" ").trim() || "Ученик";
+}
+
+function studentBirthDate(student) {
+  if (student?.birthDate) return String(student.birthDate).slice(0, 10);
+  const year = Number(student?.birthYear);
+  return Number.isFinite(year) && year > 1900 ? `${year}-01-01` : "";
+}
+
+function studentAge(student) {
+  const birthDate = studentBirthDate(student);
+  if (!birthDate) return "";
+  const [birthYear, birthMonth, birthDay] = birthDate.split("-").map(Number);
+  if (!birthYear || !birthMonth || !birthDay) return "";
+  const [todayYear, todayMonth, todayDay] = TODAY.split("-").map(Number);
+  let age = todayYear - birthYear;
+  if (todayMonth < birthMonth || (todayMonth === birthMonth && todayDay < birthDay)) age -= 1;
+  return age >= 0 ? age : "";
+}
+
+function studentBirthSummary(student) {
+  const birthDate = studentBirthDate(student);
+  const age = studentAge(student);
+  if (!birthDate) return "дата рождения не указана";
+  return `${formatDate(birthDate)}${age !== "" ? ` (${age} лет)` : ""}`;
 }
 
 function parentForStudent(studentId) {
@@ -1697,7 +1757,7 @@ function excelSheets() {
     {
       name: "Ученики",
       rows: [
-        ["Ученик", "Статус", "Филиал", "Родитель", "Телефон", "Возраст", "Посещаемость", "К оплате", "Комментарий"],
+        ["Ученик", "Статус", "Филиал", "Родитель", "Телефон", "Дата рождения", "Посещаемость", "К оплате", "Комментарий"],
         ...currentStudents.map((student) => {
           const parent = parentForStudent(student.id);
           const fin = studentFinance(student.id);
@@ -1709,7 +1769,7 @@ function excelSheets() {
             branchName(primaryBranch),
             parent.name,
             parent.phone,
-            2026 - Number(student.birthYear || 0),
+            studentBirthSummary(student),
             `${att.visited}/${att.possible} (${att.percent}%)`,
             isOwner() ? money(fin.toPay) : "скрыто",
             student.note || ""
@@ -2375,6 +2435,7 @@ function applyRemoteState(state) {
   normalizeUserAccounts();
   if (normalizeTrainerAssignments()) saveData();
   sanitizeStoredData();
+  normalizeStudentIdentityFields();
   return before !== sharedStateSignature();
 }
 
@@ -2522,7 +2583,7 @@ function viewStudents() {
               const st = studentAttendanceSummary(student.id);
               const fin = studentFinance(student.id);
               return `<tr>
-                <td><strong>${studentName(student.id)}</strong><br><span class="muted">${2026 - student.birthYear} лет · ${escapeHtml(student.note || "без комментария")}</span></td>
+                <td><strong>${studentName(student.id)}</strong><br><span class="muted">${studentBirthSummary(student)} · ${escapeHtml(student.note || "без комментария")}</span></td>
                 <td>${studentStatusControl(student)}</td>
                 <td>${branchChipsForStudent(student.id)}</td>
                 <td>${parent.name}<br><span class="muted">${parent.phone}</span></td>
@@ -4472,9 +4533,10 @@ function populateStudentForm(trainingId = null, studentId = null) {
   branchSelect.onchange = fillGroups;
   fillGroups();
 
-  studentForm.querySelector("[name=firstName]").value = student ? student.firstName : "";
-  studentForm.querySelector("[name=lastName]").value = student ? student.lastName : "";
-  studentForm.querySelector("[name=age]").value = student ? Math.max(3, 2026 - student.birthYear) : 8;
+  const nameParts = student ? splitStudentName(student) : { firstName: "", lastName: "" };
+  studentForm.querySelector("[name=lastName]").value = nameParts.lastName;
+  studentForm.querySelector("[name=firstName]").value = nameParts.firstName;
+  studentForm.querySelector("[name=birthDate]").value = student ? studentBirthDate(student) : "";
   studentForm.querySelector("[name=parent]").value = parent?.name || "";
   studentForm.querySelector("[name=phone]").value = parent?.phone || "";
   studentForm.querySelector("[name=parentVk]").value = parent?.vk || "";
@@ -4490,14 +4552,14 @@ function addStudentFromForm(event) {
   }
   event.preventDefault();
   const form = new FormData(studentForm);
-  const firstName = cleanText(form.get("firstName"), 60);
   const lastName = cleanText(form.get("lastName"), 80);
-  const displayName = [firstName, lastName].filter(Boolean).join(" ").trim();
-  const age = Number(form.get("age"));
+  const firstName = cleanText(form.get("firstName"), 60);
+  const displayName = [lastName, firstName].filter(Boolean).join(" ").trim();
+  const birthDate = String(form.get("birthDate") || "").slice(0, 10);
   const parentName = cleanText(form.get("parent"), 120);
   const phone = cleanText(form.get("phone"), 40);
   const parentVk = cleanText(form.get("parentVk"), 160);
-  if (!firstName || !lastName || !age) return toast("Заполните имя, фамилию и возраст");
+  if (!lastName || !firstName || !birthDate) return toast("Заполните фамилию, имя и дату рождения");
   if (studentForm.dataset.editing) {
     updateStudentFromForm(studentForm.dataset.editing, form);
     return;
@@ -4516,7 +4578,8 @@ function addStudentFromForm(event) {
     id: studentId,
     firstName,
     lastName,
-    birthYear: 2026 - age,
+    birthDate,
+    birthYear: Number(birthDate.slice(0, 4)),
     status,
     primaryGroupId: groupId,
     joinedAt: startDate,
@@ -4546,9 +4609,9 @@ function updateStudentFromForm(studentId, form) {
   const student = byId(db.students, studentId);
   if (!student) return toast("Ученик не найден");
 
-  const firstName = cleanText(form.get("firstName"), 60);
   const lastName = cleanText(form.get("lastName"), 80);
-  const age = Number(form.get("age"));
+  const firstName = cleanText(form.get("firstName"), 60);
+  const birthDate = String(form.get("birthDate") || "").slice(0, 10);
   const parentName = cleanText(form.get("parent"), 120);
   const phone = cleanText(form.get("phone"), 40);
   const parentVk = cleanText(form.get("parentVk"), 160);
@@ -4557,11 +4620,12 @@ function updateStudentFromForm(studentId, form) {
   const status = form.get("status") === "Пробный" ? "TRIAL" : form.get("status") === "Неактивный" ? "INACTIVE" : "ACTIVE";
   const group = byId(db.groups, groupId);
 
-  if (!firstName || !lastName || !age || !group) return toast("Заполните имя, фамилию и возраст");
+  if (!lastName || !firstName || !birthDate || !group) return toast("Заполните фамилию, имя и дату рождения");
 
   student.firstName = firstName;
   student.lastName = lastName;
-  student.birthYear = 2026 - age;
+  student.birthDate = birthDate;
+  student.birthYear = Number(birthDate.slice(0, 4));
   student.status = status;
   student.primaryGroupId = groupId;
   student.note = cleanText(form.get("comment"), 500);
