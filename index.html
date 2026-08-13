@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Атака CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260814-student-birthdate" />
+    <link rel="stylesheet" href="styles.css?v=20260814-birthdate-dot-format" />
   </head>
   <body>
     <div class="app-shell">
@@ -66,7 +66,7 @@
         <div class="form-grid">
           <label>Фамилия ребенка<input name="lastName" required placeholder="Например, Иванов" /></label>
           <label>Имя ребенка<input name="firstName" required placeholder="Например, Артем" /></label>
-          <label>Дата рождения<input name="birthDate" required type="date" /></label>
+          <label>Дата рождения<input name="birthDate" required inputmode="numeric" pattern="\d{2}\.\d{2}\.\d{4}" placeholder="01.01.2017" /></label>
           <label>Родитель<input name="parent" placeholder="Можно заполнить позже" /></label>
           <label>Телефон<input name="phone" placeholder="Можно заполнить позже" /></label>
           <label>VK родителя<input name="parentVk" placeholder="Ссылка на профиль" /></label>
@@ -136,8 +136,8 @@
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 
-    <script src="supabase-config.js?v=20260814-student-birthdate"></script>
-    <script src="supabase-sync.js?v=20260814-student-birthdate"></script>
-    <script src="app.js?v=20260814-student-birthdate"></script>
+    <script src="supabase-config.js?v=20260814-birthdate-dot-format"></script>
+    <script src="supabase-sync.js?v=20260814-birthdate-dot-format"></script>
+    <script src="app.js?v=20260814-birthdate-dot-format"></script>
   </body>
 </html>

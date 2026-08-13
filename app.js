@@ -1125,6 +1125,27 @@ function studentBirthDate(student) {
   return Number.isFinite(year) && year > 1900 ? `${year}-01-01` : "";
 }
 
+function displayBirthDate(value) {
+  const date = String(value || "").slice(0, 10);
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : "";
+}
+
+function normalizeBirthDateInput(value) {
+  const raw = String(value || "").trim();
+  let match = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (match) return `${match[3]}-${match[2]}-${match[1]}`;
+  match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? raw : "";
+}
+
+function birthDateIsValid(value) {
+  if (!value) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(`${value}T12:00:00`);
+  return date.getFullYear() === year && date.getMonth() + 1 === month && date.getDate() === day;
+}
+
 function studentAge(student) {
   const birthDate = studentBirthDate(student);
   if (!birthDate) return "";
@@ -1140,7 +1161,7 @@ function studentBirthSummary(student) {
   const birthDate = studentBirthDate(student);
   const age = studentAge(student);
   if (!birthDate) return "дата рождения не указана";
-  return `${formatDate(birthDate)}${age !== "" ? ` (${age} лет)` : ""}`;
+  return `${displayBirthDate(birthDate)}${age !== "" ? ` (${age} лет)` : ""}`;
 }
 
 function parentForStudent(studentId) {
@@ -4536,7 +4557,7 @@ function populateStudentForm(trainingId = null, studentId = null) {
   const nameParts = student ? splitStudentName(student) : { firstName: "", lastName: "" };
   studentForm.querySelector("[name=lastName]").value = nameParts.lastName;
   studentForm.querySelector("[name=firstName]").value = nameParts.firstName;
-  studentForm.querySelector("[name=birthDate]").value = student ? studentBirthDate(student) : "";
+  studentForm.querySelector("[name=birthDate]").value = student ? displayBirthDate(studentBirthDate(student)) : "";
   studentForm.querySelector("[name=parent]").value = parent?.name || "";
   studentForm.querySelector("[name=phone]").value = parent?.phone || "";
   studentForm.querySelector("[name=parentVk]").value = parent?.vk || "";
@@ -4555,11 +4576,11 @@ function addStudentFromForm(event) {
   const lastName = cleanText(form.get("lastName"), 80);
   const firstName = cleanText(form.get("firstName"), 60);
   const displayName = [lastName, firstName].filter(Boolean).join(" ").trim();
-  const birthDate = String(form.get("birthDate") || "").slice(0, 10);
+  const birthDate = normalizeBirthDateInput(form.get("birthDate"));
   const parentName = cleanText(form.get("parent"), 120);
   const phone = cleanText(form.get("phone"), 40);
   const parentVk = cleanText(form.get("parentVk"), 160);
-  if (!lastName || !firstName || !birthDate) return toast("Заполните фамилию, имя и дату рождения");
+  if (!lastName || !firstName || !birthDateIsValid(birthDate)) return toast("Заполните дату рождения в формате 01.01.2017");
   if (studentForm.dataset.editing) {
     updateStudentFromForm(studentForm.dataset.editing, form);
     return;
@@ -4611,7 +4632,7 @@ function updateStudentFromForm(studentId, form) {
 
   const lastName = cleanText(form.get("lastName"), 80);
   const firstName = cleanText(form.get("firstName"), 60);
-  const birthDate = String(form.get("birthDate") || "").slice(0, 10);
+  const birthDate = normalizeBirthDateInput(form.get("birthDate"));
   const parentName = cleanText(form.get("parent"), 120);
   const phone = cleanText(form.get("phone"), 40);
   const parentVk = cleanText(form.get("parentVk"), 160);
@@ -4620,7 +4641,7 @@ function updateStudentFromForm(studentId, form) {
   const status = form.get("status") === "Пробный" ? "TRIAL" : form.get("status") === "Неактивный" ? "INACTIVE" : "ACTIVE";
   const group = byId(db.groups, groupId);
 
-  if (!lastName || !firstName || !birthDate || !group) return toast("Заполните фамилию, имя и дату рождения");
+  if (!lastName || !firstName || !birthDateIsValid(birthDate) || !group) return toast("Заполните дату рождения в формате 01.01.2017");
 
   student.firstName = firstName;
   student.lastName = lastName;
