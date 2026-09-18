@@ -12,6 +12,7 @@ const LOCAL_UI_KEYS = [
   "currentUserId",
   "activeView",
   "settingsTab",
+  "settingsBranchId",
   "selectedBranchId",
   "query",
   "filters",
@@ -49,6 +50,11 @@ const SHARED_STATE_KEYS = [
   "archive",
   "auditLog",
   "scheduleVersion",
+  "subgroupVersion",
+  "branch84Version",
+  "branch64Version",
+  "branch74SecondVersion",
+  "groupStructureVersion",
   "realRosterVersion",
   "assistantRuleVersion",
   "historyResetVersion"
@@ -64,12 +70,13 @@ const defaultData = {
   currentUserId: "u1",
   activeView: "today",
   settingsTab: "general",
+  settingsBranchId: null,
   selectedBranchId: "b1",
   query: "",
   security: { loginFailures: {} },
   filters: { branchId: "all", groupId: "all", month: CURRENT_MONTH },
-  trainingFilters: { branchId: "all", month: CURRENT_MONTH },
-  coachFilters: { branchId: "all", month: CURRENT_MONTH },
+  trainingFilters: { branchId: "all", groupId: "", month: CURRENT_MONTH },
+  coachFilters: { branchId: "all", groupId: "", month: CURRENT_MONTH },
   financeFilters: { branchId: "all", month: CURRENT_MONTH },
   paymentFilters: { branchId: "all", month: CURRENT_MONTH },
   messageFilters: { branchId: "all", month: CURRENT_MONTH },
@@ -81,6 +88,11 @@ const defaultData = {
     assistantRate: 800,
     dueDay: 7
   },
+  subgroupVersion: null,
+  branch84Version: null,
+  branch64Version: null,
+  branch74SecondVersion: null,
+  groupStructureVersion: null,
   users: [
     { id: "u1", name: "Иван", role: "owner", branchIds: ["b1", "b2", "b3", "b4", "b5", "b6"], groupIds: ["g1", "g2", "g3", "g4", "g5", "g6"] },
     { id: "u2", name: "Марина", role: "owner", branchIds: ["b1", "b2", "b3", "b4", "b5", "b6"], groupIds: ["g1", "g2", "g3", "g4", "g5", "g6"] },
@@ -192,9 +204,15 @@ const defaultData = {
 let db = loadData();
 let remoteBootstrapping = false;
 let remoteRefreshTimer = null;
+let pendingRemoteMigration = false;
 syncBranchNames();
 syncRealRoster();
 syncRealSchedule();
+if (sync87SchoolSubgroups()) saveData();
+if (sync84SchoolGroups()) saveData();
+if (sync64SchoolGroup()) saveData();
+if (sync74SecondSchoolGroups()) saveData();
+if (syncSingleGroupBranches()) saveData();
 syncAssistantRule();
 resetHistoricalCounters();
 if (normalizeChargesToConfirmed()) saveData();
@@ -261,6 +279,40 @@ const assistantTrainerSelect = document.getElementById("assistantTrainerSelect")
 const extraTrainingDialog = document.getElementById("extraTrainingDialog");
 const extraTrainingForm = document.getElementById("extraTrainingForm");
 const toastHost = document.getElementById("toastHost");
+const syncStatusButton = document.getElementById("syncStatus");
+const syncStatusText = document.getElementById("syncStatusText");
+let syncIndicatorState = window.AtakaRemote?.getSyncStatus?.() || { status: "idle", at: "", message: "" };
+
+function syncTimeLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+function updateSyncIndicator(loggedIn = isLoggedIn()) {
+  if (!syncStatusButton || !syncStatusText) return;
+  const remoteAvailable = Boolean(window.AtakaRemote?.isReady?.() && window.AtakaRemote?.isSignedIn?.());
+  syncStatusButton.hidden = !loggedIn || !remoteAvailable;
+  if (syncStatusButton.hidden) return;
+
+  const state = syncIndicatorState?.status || "idle";
+  const savedTime = syncTimeLabel(syncIndicatorState?.at);
+  const labels = {
+    idle: savedTime ? `Сохранено в общей базе · ${savedTime}` : "Общая база подключена",
+    pending: "Сохраняется в общей базе...",
+    saving: "Сохраняется в общей базе...",
+    saved: savedTime ? `Сохранено в общей базе · ${savedTime}` : "Сохранено в общей базе",
+    error: "Не сохранено. Нажмите, чтобы повторить",
+    offline: "Не сохранено: нет связи"
+  };
+  syncStatusButton.dataset.state = state;
+  syncStatusText.textContent = labels[state] || labels.idle;
+  const canRetry = state === "error" || state === "offline";
+  syncStatusButton.classList.toggle("can-retry", canRetry);
+  syncStatusButton.setAttribute("aria-disabled", String(!canRetry));
+  syncStatusButton.title = canRetry ? (syncIndicatorState.message || "Повторить сохранение в общей базе") : syncStatusText.textContent;
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -619,13 +671,499 @@ function createTrainingsFromRealSchedule(month, fromDate = "") {
   });
 }
 
+function sync87SchoolSubgroups() {
+  const version = "87-school-three-groups-2026-09-v1";
+  if (db.subgroupVersion === version) return false;
+
+  const branch = byId(db.branches, "b3") || db.branches.find((item) => item.name === "87 СОШ" && !item.deletedAt);
+  if (!branch) return false;
+
+  const existingGroup = byId(db.groups, "g4") || db.groups.find((group) => group.branchId === branch.id && !group.deletedAt && !group.archivedAt);
+  const trainerId = existingGroup?.trainerId || fallbackCoachId();
+  const groupSpecs = [
+    {
+      id: existingGroup?.id || "group_b3_preschool",
+      name: "Дошкольники",
+      ageRange: "дошкольники",
+      days: [
+        { weekday: 4, startTime: "18:00", endTime: "19:00" },
+        { weekday: 0, startTime: "16:30", endTime: "17:30" }
+      ]
+    },
+    {
+      id: "group_b3_1_2",
+      name: "1-2 класс",
+      ageRange: "1-2 класс",
+      days: [
+        { weekday: 1, startTime: "16:30", endTime: "17:30" },
+        { weekday: 5, startTime: "17:00", endTime: "18:00" },
+        { weekday: 0, startTime: "17:30", endTime: "18:30" }
+      ]
+    },
+    {
+      id: "group_b3_3_5",
+      name: "3-5 классы",
+      ageRange: "3-5 классы",
+      days: [
+        { weekday: 1, startTime: "17:30", endTime: "18:30" },
+        { weekday: 4, startTime: "19:30", endTime: "20:30" },
+        { weekday: 0, startTime: "18:30", endTime: "19:30" }
+      ]
+    }
+  ];
+
+  groupSpecs.forEach((spec, index) => {
+    let group = byId(db.groups, spec.id);
+    if (!group && index === 0 && existingGroup) group = existingGroup;
+    if (!group) {
+      group = {
+        id: spec.id,
+        branchId: branch.id,
+        name: spec.name,
+        ageRange: spec.ageRange,
+        trainerId,
+        assistantId: null,
+        isActive: true,
+        archivedAt: null,
+        deletedAt: null
+      };
+      db.groups.push(group);
+    } else {
+      group.branchId = branch.id;
+      group.name = spec.name;
+      group.ageRange = spec.ageRange;
+      group.trainerId = group.trainerId || trainerId;
+      group.isActive = true;
+      group.archivedAt = null;
+      group.deletedAt = null;
+    }
+  });
+
+  const groupIds = groupSpecs.map((spec) => spec.id);
+  db.schedules = db.schedules.filter((schedule) => !groupIds.includes(schedule.groupId));
+  groupSpecs.forEach((spec) => {
+    spec.days.forEach((day, index) => {
+      db.schedules.push({
+        id: `real_sch_${spec.id}_${day.weekday}_${index}`,
+        groupId: spec.id,
+        weekday: day.weekday,
+        startTime: day.startTime,
+        endTime: day.endTime,
+        startsAt: TODAY,
+        endsAt: null
+      });
+    });
+  });
+
+  db.users.forEach((user) => {
+    if (user.deletedAt) return;
+    if (user.role === "owner" || (user.role === "coach" && (user.branchIds || []).includes(branch.id))) {
+      user.branchIds ||= [];
+      user.groupIds ||= [];
+      if (!user.branchIds.includes(branch.id)) user.branchIds.push(branch.id);
+      groupIds.forEach((groupId) => {
+        if (!user.groupIds.includes(groupId)) user.groupIds.push(groupId);
+      });
+    }
+  });
+
+  db.trainings = db.trainings.filter((training) => {
+    if (training.branchId !== branch.id || training.type !== "REGULAR") return true;
+    if (training.date < TODAY || trainingHasMarks(training.id)) return true;
+    return false;
+  });
+  AVAILABLE_MONTHS.forEach((month) => createTrainingsFromRealSchedule(month, TODAY));
+  db.subgroupVersion = version;
+  audit("Филиал разделен на подгруппы", "87 СОШ: Дошкольники, 1-2 класс, 3-5 классы");
+  return true;
+}
+
+function sync84SchoolGroups() {
+  const version = "84-school-two-groups-2026-09-v1";
+  if (db.branch84Version === version) return false;
+
+  let branch = byId(db.branches, "b7") || db.branches.find((item) => item.name === "84 СОШ" && !item.deletedAt);
+  if (!branch) {
+    branch = {
+      id: "b7",
+      name: "84 СОШ",
+      address: "Адрес уточняется",
+      isActive: true,
+      archivedAt: null,
+      deletedAt: null
+    };
+    db.branches.push(branch);
+  } else {
+    branch.name = "84 СОШ";
+    branch.isActive = true;
+    branch.archivedAt = null;
+    branch.deletedAt = null;
+  }
+
+  const groupBlueprints = [
+    {
+      fallbackId: "group_b7_1_2",
+      name: "1-2 класс",
+      ageRange: "1-2 класс",
+      days: [
+        { weekday: 2, startTime: "18:00", endTime: "19:00" },
+        { weekday: 6, startTime: "16:00", endTime: "17:00" },
+        { weekday: 0, startTime: "13:30", endTime: "14:30" }
+      ]
+    },
+    {
+      fallbackId: "group_b7_3_5",
+      name: "3-5 классы",
+      ageRange: "3-5 классы",
+      days: [
+        { weekday: 6, startTime: "17:00", endTime: "18:00" },
+        { weekday: 0, startTime: "14:30", endTime: "15:30" }
+      ]
+    }
+  ];
+
+  const groupSpecs = groupBlueprints.map((blueprint) => {
+    const existing = db.groups.find((group) => group.branchId === branch.id && group.name === blueprint.name && !group.deletedAt);
+    return { ...blueprint, id: existing?.id || blueprint.fallbackId, existing };
+  });
+
+  groupSpecs.forEach((spec) => {
+    const group = spec.existing || byId(db.groups, spec.id);
+    if (!group) {
+      db.groups.push({
+        id: spec.id,
+        branchId: branch.id,
+        name: spec.name,
+        ageRange: spec.ageRange,
+        trainerId: null,
+        assistantId: null,
+        isActive: true,
+        archivedAt: null,
+        deletedAt: null
+      });
+      return;
+    }
+    group.branchId = branch.id;
+    group.name = spec.name;
+    group.ageRange = spec.ageRange;
+    group.isActive = true;
+    group.archivedAt = null;
+    group.deletedAt = null;
+  });
+
+  const groupIds = groupSpecs.map((spec) => spec.id);
+  db.schedules = db.schedules.filter((schedule) => !groupIds.includes(schedule.groupId));
+  groupSpecs.forEach((spec) => {
+    spec.days.forEach((day, index) => {
+      db.schedules.push({
+        id: `real_sch_${spec.id}_${day.weekday}_${index}`,
+        groupId: spec.id,
+        weekday: day.weekday,
+        startTime: day.startTime,
+        endTime: day.endTime,
+        startsAt: TODAY,
+        endsAt: null
+      });
+    });
+  });
+
+  db.users.forEach((user) => {
+    if (user.deletedAt || user.role !== "owner") return;
+    user.branchIds ||= [];
+    user.groupIds ||= [];
+    if (!user.branchIds.includes(branch.id)) user.branchIds.push(branch.id);
+    groupIds.forEach((groupId) => {
+      if (!user.groupIds.includes(groupId)) user.groupIds.push(groupId);
+    });
+  });
+
+  db.trainings = db.trainings.filter((training) => {
+    if (training.branchId !== branch.id || training.type !== "REGULAR") return true;
+    if (training.date < TODAY || trainingHasMarks(training.id)) return true;
+    return false;
+  });
+  AVAILABLE_MONTHS.forEach((month) => createTrainingsFromRealSchedule(month, TODAY));
+  db.branch84Version = version;
+  audit("Добавлен филиал с группами", "84 СОШ: 1-2 класс, 3-5 классы");
+  return true;
+}
+
+function sync64SchoolGroup() {
+  const version = "64-school-main-group-2026-09-v1";
+  if (db.branch64Version === version) return false;
+
+  let branch = byId(db.branches, "b8") || db.branches.find((item) => item.name === "64 СОШ" && !item.deletedAt);
+  if (!branch) {
+    branch = {
+      id: "b8",
+      name: "64 СОШ",
+      address: "Адрес уточняется",
+      isActive: true,
+      archivedAt: null,
+      deletedAt: null
+    };
+    db.branches.push(branch);
+  } else {
+    branch.name = "64 СОШ";
+    branch.isActive = true;
+    branch.archivedAt = null;
+    branch.deletedAt = null;
+  }
+
+  const branchGroups = db.groups.filter((group) => group.branchId === branch.id && !group.deletedAt && !group.archivedAt && group.isActive);
+  const enrollmentCount = (groupId) => db.enrollments.filter((enrollment) => enrollment.groupId === groupId && !enrollment.endsAt).length;
+  let group = branchGroups.slice().sort((a, b) => enrollmentCount(b.id) - enrollmentCount(a.id))[0];
+  if (!group) {
+    group = {
+      id: "group_b8_main",
+      branchId: branch.id,
+      name: "Основная группа",
+      ageRange: "уточнить",
+      trainerId: null,
+      assistantId: null,
+      isActive: true,
+      archivedAt: null,
+      deletedAt: null
+    };
+    db.groups.push(group);
+  } else {
+    group.name = "Основная группа";
+    group.isActive = true;
+    group.archivedAt = null;
+    group.deletedAt = null;
+  }
+
+  db.schedules = db.schedules.filter((schedule) => schedule.groupId !== group.id);
+  [
+    { weekday: 4, startTime: "18:00", endTime: "19:00" },
+    { weekday: 6, startTime: "14:00", endTime: "15:00" }
+  ].forEach((day, index) => {
+    db.schedules.push({
+      id: `real_sch_${group.id}_${day.weekday}_${index}`,
+      groupId: group.id,
+      weekday: day.weekday,
+      startTime: day.startTime,
+      endTime: day.endTime,
+      startsAt: TODAY,
+      endsAt: null
+    });
+  });
+
+  db.users.forEach((user) => {
+    if (user.deletedAt || user.role !== "owner") return;
+    user.branchIds ||= [];
+    user.groupIds ||= [];
+    if (!user.branchIds.includes(branch.id)) user.branchIds.push(branch.id);
+    if (!user.groupIds.includes(group.id)) user.groupIds.push(group.id);
+  });
+
+  db.trainings = db.trainings.filter((training) => {
+    if (training.branchId !== branch.id || training.type !== "REGULAR") return true;
+    if (training.date < TODAY || trainingHasMarks(training.id)) return true;
+    return false;
+  });
+  AVAILABLE_MONTHS.forEach((month) => createTrainingsFromRealSchedule(month, TODAY));
+  db.branch64Version = version;
+  audit("Добавлен филиал с расписанием", "64 СОШ: четверг 18:00-19:00, суббота 14:00-15:00");
+  return true;
+}
+
+function sync74SecondSchoolGroups() {
+  const version = "74-school-second-building-two-groups-2026-09-v1";
+  if (db.branch74SecondVersion === version) return false;
+
+  let branch = byId(db.branches, "b9") || db.branches.find((item) => item.name === "74 СОШ(2корп)" && !item.deletedAt);
+  if (!branch) {
+    branch = {
+      id: "b9",
+      name: "74 СОШ(2корп)",
+      address: "Адрес уточняется",
+      isActive: true,
+      archivedAt: null,
+      deletedAt: null
+    };
+    db.branches.push(branch);
+  } else {
+    branch.name = "74 СОШ(2корп)";
+    branch.isActive = true;
+    branch.archivedAt = null;
+    branch.deletedAt = null;
+  }
+
+  const groupBlueprints = [
+    {
+      fallbackId: "group_b9_1_2",
+      name: "1-2 класс",
+      ageRange: "1-2 класс",
+      days: [
+        { weekday: 2, startTime: "18:30", endTime: "19:30" },
+        { weekday: 4, startTime: "18:30", endTime: "19:30" },
+        { weekday: 0, startTime: "12:30", endTime: "13:30" }
+      ]
+    },
+    {
+      fallbackId: "group_b9_3_4",
+      name: "3-4 класс",
+      ageRange: "3-4 класс",
+      days: [
+        { weekday: 2, startTime: "19:30", endTime: "20:30" },
+        { weekday: 4, startTime: "19:30", endTime: "20:30" },
+        { weekday: 0, startTime: "13:30", endTime: "14:30" }
+      ]
+    }
+  ];
+
+  const groupSpecs = groupBlueprints.map((blueprint) => {
+    const existing = db.groups.find((group) => group.branchId === branch.id && group.name === blueprint.name && !group.deletedAt);
+    return { ...blueprint, id: existing?.id || blueprint.fallbackId, existing };
+  });
+
+  groupSpecs.forEach((spec) => {
+    const group = spec.existing || byId(db.groups, spec.id);
+    if (!group) {
+      db.groups.push({
+        id: spec.id,
+        branchId: branch.id,
+        name: spec.name,
+        ageRange: spec.ageRange,
+        trainerId: null,
+        assistantId: null,
+        isActive: true,
+        archivedAt: null,
+        deletedAt: null
+      });
+      return;
+    }
+    group.branchId = branch.id;
+    group.name = spec.name;
+    group.ageRange = spec.ageRange;
+    group.isActive = true;
+    group.archivedAt = null;
+    group.deletedAt = null;
+  });
+
+  const groupIds = groupSpecs.map((spec) => spec.id);
+  db.schedules = db.schedules.filter((schedule) => !groupIds.includes(schedule.groupId));
+  groupSpecs.forEach((spec) => {
+    spec.days.forEach((day, index) => {
+      db.schedules.push({
+        id: `real_sch_${spec.id}_${day.weekday}_${index}`,
+        groupId: spec.id,
+        weekday: day.weekday,
+        startTime: day.startTime,
+        endTime: day.endTime,
+        startsAt: TODAY,
+        endsAt: null
+      });
+    });
+  });
+
+  db.users.forEach((user) => {
+    if (user.deletedAt || user.role !== "owner") return;
+    user.branchIds ||= [];
+    user.groupIds ||= [];
+    if (!user.branchIds.includes(branch.id)) user.branchIds.push(branch.id);
+    groupIds.forEach((groupId) => {
+      if (!user.groupIds.includes(groupId)) user.groupIds.push(groupId);
+    });
+  });
+
+  db.trainings = db.trainings.filter((training) => {
+    if (training.branchId !== branch.id || training.type !== "REGULAR") return true;
+    if (training.date < TODAY || trainingHasMarks(training.id)) return true;
+    return false;
+  });
+  AVAILABLE_MONTHS.forEach((month) => createTrainingsFromRealSchedule(month, TODAY));
+  db.branch74SecondVersion = version;
+  audit("Добавлен филиал с группами", "74 СОШ(2корп): 1-2 класс, 3-4 класс");
+  return true;
+}
+
+function syncSingleGroupBranches() {
+  const version = "single-group-except-87-84-and-74-second-2026-09-v4";
+  if (db.groupStructureVersion === version) return false;
+
+  const school87 = byId(db.branches, "b3") || db.branches.find((branch) => branch.name === "87 СОШ" && !branch.deletedAt);
+  const school84 = byId(db.branches, "b7") || db.branches.find((branch) => branch.name === "84 СОШ" && !branch.deletedAt);
+  const school74Second = byId(db.branches, "b9") || db.branches.find((branch) => branch.name === "74 СОШ(2корп)" && !branch.deletedAt);
+  const multiGroupBranchIds = new Set([school87?.id, school84?.id, school74Second?.id].filter(Boolean));
+  let changed = false;
+
+  db.branches
+    .filter((branch) => !branch.deletedAt && !multiGroupBranchIds.has(branch.id))
+    .forEach((branch) => {
+      const groups = db.groups.filter((group) => group.branchId === branch.id && !group.deletedAt && !group.archivedAt && group.isActive);
+      if (groups.length <= 1) return;
+
+      const enrollmentCount = (groupId) => db.enrollments.filter((enrollment) => enrollment.groupId === groupId && !enrollment.endsAt).length;
+      const primary = groups.slice().sort((a, b) => enrollmentCount(b.id) - enrollmentCount(a.id))[0];
+      const mergedIds = new Set(groups.map((group) => group.id));
+      const removedIds = new Set(groups.filter((group) => group.id !== primary.id).map((group) => group.id));
+
+      const schedulesByDay = new Map();
+      db.schedules
+        .filter((schedule) => mergedIds.has(schedule.groupId) && !schedule.endsAt)
+        .sort((a, b) => Number(b.groupId === primary.id) - Number(a.groupId === primary.id))
+        .forEach((schedule) => {
+          if (!schedulesByDay.has(schedule.weekday)) schedulesByDay.set(schedule.weekday, { ...schedule, groupId: primary.id });
+        });
+      db.schedules = db.schedules.filter((schedule) => !mergedIds.has(schedule.groupId));
+      db.schedules.push(...schedulesByDay.values());
+
+      [db.trainings, db.charges, db.credits, db.debts].forEach((collection) => {
+        collection.forEach((item) => {
+          if (removedIds.has(item.groupId)) item.groupId = primary.id;
+        });
+      });
+      db.students.forEach((student) => {
+        if (removedIds.has(student.primaryGroupId)) student.primaryGroupId = primary.id;
+      });
+      db.enrollments.forEach((enrollment) => {
+        if (removedIds.has(enrollment.groupId)) enrollment.groupId = primary.id;
+      });
+
+      const studentIds = new Set(db.enrollments.filter((enrollment) => enrollment.branchId === branch.id && !enrollment.endsAt).map((enrollment) => enrollment.studentId));
+      studentIds.forEach((studentId) => {
+        const active = db.enrollments.filter((enrollment) => enrollment.studentId === studentId && enrollment.branchId === branch.id && !enrollment.endsAt);
+        if (active.length <= 1) return;
+        const keep = active.find((enrollment) => enrollment.isPrimary) || active[0];
+        keep.groupId = primary.id;
+        active.forEach((enrollment) => {
+          if (enrollment.id === keep.id) return;
+          enrollment.endsAt = TODAY;
+          enrollment.isPrimary = false;
+        });
+      });
+
+      db.users.forEach((user) => {
+        user.groupIds ||= [];
+        user.groupIds = user.groupIds.filter((groupId) => !removedIds.has(groupId));
+        if ((user.role === "owner" || (user.branchIds || []).includes(branch.id)) && !user.groupIds.includes(primary.id)) user.groupIds.push(primary.id);
+      });
+      groups.forEach((group) => {
+        if (group.id === primary.id) return;
+        group.isActive = false;
+        group.archivedAt = nowText();
+      });
+
+      [db.filters, db.trainingFilters, db.coachFilters].forEach((filters) => {
+        if (filters && removedIds.has(filters.groupId)) filters.groupId = primary.id;
+      });
+      changed = true;
+    });
+
+  db.groupStructureVersion = version;
+  if (changed) audit("Объединены лишние группы", "Многогрупповыми оставлены 87 СОШ, 84 СОШ и 74 СОШ(2корп)");
+  return true;
+}
+
 function trainingHasMarks(trainingId) {
   return db.attendance.some((mark) => mark.trainingId === trainingId && mark.mark && mark.mark !== "EMPTY");
 }
 
 function rebuildBranchTrainingsFromSchedule(branchId) {
-  const group = byId(db.groups, ensureRosterGroup(branchId));
-  if (!group) return;
+  const groups = db.groups.filter((group) => group.branchId === branchId && !group.deletedAt && !group.archivedAt && group.isActive);
+  if (!groups.length) return;
 
   db.trainings = db.trainings.filter((training) => {
     if (training.branchId !== branchId || training.type !== "REGULAR") return true;
@@ -798,8 +1336,8 @@ function stockReset() {
   if (password !== "1337") return toast("Неверный пароль СТОК");
   clearOperationalTables();
   db.filters = { branchId: "all", groupId: "all", month: CURRENT_MONTH };
-  db.trainingFilters = { branchId: "all", month: CURRENT_MONTH };
-  db.coachFilters = { branchId: "all", month: CURRENT_MONTH };
+  db.trainingFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
+  db.coachFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
   db.financeFilters = { branchId: "all", month: CURRENT_MONTH };
   db.paymentFilters = { branchId: "all", month: CURRENT_MONTH };
   db.messageFilters = { branchId: "all", month: CURRENT_MONTH };
@@ -865,7 +1403,7 @@ function normalizeTrainerAssignments() {
 
   db.groups.forEach((group) => {
     if (group.deletedAt || group.archivedAt) return;
-    if (!isValidCoach(group.trainerId)) {
+    if (group.trainerId && !isValidCoach(group.trainerId)) {
       group.trainerId = fallback;
       changed = true;
     }
@@ -877,7 +1415,7 @@ function normalizeTrainerAssignments() {
 
   db.trainings.forEach((training) => {
     if (training.deletedAt || training.archivedAt) return;
-    if (!isValidCoach(training.trainerId)) {
+    if (training.trainerId && !isValidCoach(training.trainerId)) {
       const group = byId(db.groups, training.groupId);
       training.trainerId = isValidCoach(group?.trainerId) ? group.trainerId : fallback;
       changed = true;
@@ -1201,8 +1739,7 @@ function weekdayFullName(day) {
   return ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"][day];
 }
 
-function branchScheduleMap(branchId) {
-  const groupId = ensureRosterGroup(branchId);
+function groupScheduleMap(groupId) {
   const map = new Map();
   db.schedules
     .filter((schedule) => schedule.groupId === groupId && !schedule.endsAt)
@@ -2224,7 +2761,9 @@ function render() {
   updateChargeStatuses();
   const sectionEyebrow = document.getElementById("sectionEyebrow");
   if (sectionEyebrow) sectionEyebrow.textContent = `Сегодня, ${formatDate(TODAY)}`;
-  if (!isLoggedIn()) {
+  const loggedIn = isLoggedIn();
+  updateSyncIndicator(loggedIn);
+  if (!loggedIn) {
     navList.innerHTML = "";
     pageTitle.textContent = "Вход";
     document.getElementById("welcomePanel").hidden = true;
@@ -2249,8 +2788,8 @@ function render() {
     db.filters.groupId = "all";
     saveData();
   }
-  if (!db.trainingFilters) db.trainingFilters = { branchId: "all", month: CURRENT_MONTH };
-  if (!db.coachFilters) db.coachFilters = { branchId: "all", month: CURRENT_MONTH };
+  if (!db.trainingFilters) db.trainingFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
+  if (!db.coachFilters) db.coachFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
   if (!db.financeFilters) db.financeFilters = { branchId: "all", month: CURRENT_MONTH };
   if (!db.paymentFilters) db.paymentFilters = { branchId: "all", month: CURRENT_MONTH };
   if (!db.messageFilters) db.messageFilters = { branchId: "all", month: CURRENT_MONTH };
@@ -2359,6 +2898,7 @@ function viewLogin() {
         <label>Логин<input name="login" autocomplete="username" placeholder="Например: trener1" required></label>
         <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="primary-btn" type="submit">Войти</button>
+        <p class="login-status" id="loginStatus" role="status" aria-live="polite"></p>
       </form>
       <p class="muted">${onlineMode ? "Логин и пароль выдаёт владелец." : "Логин и пароль выдаёт владелец. Пароли на странице входа больше не показываются."}</p>
     </section>
@@ -2369,15 +2909,22 @@ async function loginUser(login, password) {
   const normalizedLogin = normalizeLogin(login);
   const normalizedPassword = String(password || "").trim();
   if (!isValidLoginAlias(normalizedLogin)) {
-    toast("Логин: латинские буквы, цифры, точка, дефис или _");
-    return;
+    showLoginStatus("Проверьте логин: используйте латинские буквы, цифры, точку, дефис или _.", "error");
+    return false;
   }
   if (window.AtakaRemote?.isReady?.()) {
     const supabaseEmail = loginToSupabaseEmail(normalizedLogin);
-    const remoteUser = await window.AtakaRemote.signIn(supabaseEmail, normalizedPassword);
+    let remoteUser = null;
+    try {
+      remoteUser = await window.AtakaRemote.signIn(supabaseEmail, normalizedPassword);
+    } catch (error) {
+      console.error("Ошибка входа Supabase", error);
+      showLoginStatus("Не удалось связаться с сервером. Проверьте интернет и попробуйте еще раз.", "error");
+      return false;
+    }
     if (!remoteUser) {
-      toast("Неверный логин или пароль");
-      return;
+      showLoginStatus("Неверный логин или пароль.", "error");
+      return false;
     }
     const hadRemoteData = await loadRemoteStateAfterSignIn(normalizedLogin);
     let user = db.users.find((item) => loginMatchesUser(item, normalizedLogin, supabaseEmail) && !item.deletedAt);
@@ -2386,8 +2933,8 @@ async function loginUser(login, password) {
     }
     if (!user) {
       await window.AtakaRemote.signOut();
-      toast("Логин есть в Supabase, но не добавлен в пользователи CRM");
-      return;
+      showLoginStatus("Пользователь есть в Supabase, но не добавлен в CRM.", "error");
+      return false;
     }
     if (user.login !== normalizedLogin && user.role === "owner") user.login = normalizedLogin;
     createLocalSession(user.id, normalizedLogin);
@@ -2395,15 +2942,15 @@ async function loginUser(login, password) {
     saveData("Вход выполнен через общую базу");
     startRemoteRefresh();
     render();
-    return;
+    return true;
   }
 
   db.security ||= { loginFailures: {} };
   db.security.loginFailures ||= {};
   const failure = db.security.loginFailures[normalizedLogin];
   if (failure?.lockedUntil && failure.lockedUntil > Date.now()) {
-    toast("Слишком много попыток. Попробуйте позже.");
-    return;
+    showLoginStatus("Слишком много попыток. Попробуйте через несколько минут.", "error");
+    return false;
   }
   const user = db.users.find((item) => loginMatchesUser(item, normalizedLogin) && !item.deletedAt);
   if (!user || !(await verifyUserPassword(user, normalizedPassword))) {
@@ -2415,14 +2962,22 @@ async function loginUser(login, password) {
     }
     db.security.loginFailures[normalizedLogin] = nextFailure;
     saveData();
-    toast("Неверный логин или пароль");
-    return;
+    showLoginStatus("Неверный логин или пароль.", "error");
+    return false;
   }
   delete db.security.loginFailures[normalizedLogin];
   createLocalSession(user.id, normalizedLogin);
   if (!canSeeView(db.activeView)) db.activeView = "today";
   saveData("Вход выполнен");
   render();
+  return true;
+}
+
+function showLoginStatus(message, type = "info") {
+  const status = root.querySelector("#loginStatus");
+  if (!status) return;
+  status.textContent = message;
+  status.className = `login-status ${type}`;
 }
 
 function logoutUser() {
@@ -2449,6 +3004,26 @@ function applyRemoteState(state) {
   syncBranchNames();
   syncRealRoster();
   syncRealSchedule();
+  if (sync87SchoolSubgroups()) {
+    pendingRemoteMigration = true;
+    saveData();
+  }
+  if (sync84SchoolGroups()) {
+    pendingRemoteMigration = true;
+    saveData();
+  }
+  if (sync64SchoolGroup()) {
+    pendingRemoteMigration = true;
+    saveData();
+  }
+  if (sync74SecondSchoolGroups()) {
+    pendingRemoteMigration = true;
+    saveData();
+  }
+  if (syncSingleGroupBranches()) {
+    pendingRemoteMigration = true;
+    saveData();
+  }
   syncAssistantRule();
   if (normalizeChargesToConfirmed()) saveData();
   if (rebuildAbsenceCarryovers()) saveData();
@@ -2481,6 +3056,10 @@ async function loadRemoteStateAfterSignIn(login = "", options = {}) {
     return false;
   } finally {
     remoteBootstrapping = false;
+    if (pendingRemoteMigration && window.AtakaRemote?.isSignedIn?.()) {
+      pendingRemoteMigration = false;
+      window.AtakaRemote.saveState(remoteSafeData(db));
+    }
   }
 }
 
@@ -2689,9 +3268,8 @@ function branchesTable(withActions = false, branches = activeBranches()) {
 }
 
 function branchDetailsPanel(branch) {
-  const groupId = ensureRosterGroup(branch.id);
-  const group = byId(db.groups, groupId);
-  const scheduleMap = branchScheduleMap(branch.id);
+  const groups = db.groups.filter((group) => group.branchId === branch.id && !group.deletedAt && !group.archivedAt && group.isActive);
+  const primaryGroup = groups[0];
   const weekOrder = [1, 2, 3, 4, 5, 6, 0];
   return `
     <section class="panel branch-detail-panel">
@@ -2701,26 +3279,40 @@ function branchDetailsPanel(branch) {
           <h2>${escapeHtml(branch.name)}</h2>
           <p>${escapeHtml(branch.address || "Адрес не указан")}</p>
         </div>
+        ${isOwner() ? actionButton("+ Подгруппа", "add-branch-group", branch.id, "ghost-btn") : ""}
       </div>
       <form id="branchDetailsForm" data-branch="${escapeHtml(branch.id)}">
         <div class="branch-detail-grid">
           <label>Тренер филиала
-            <select name="branchTrainer">${trainerOptions(group?.trainerId || currentUser().id)}</select>
+            <select name="branchTrainer">${trainerOptions(primaryGroup?.trainerId || "")}</select>
           </label>
         </div>
         <div class="branch-schedule-head">
-          <h3>Расписание</h3>
+          <h3>Подгруппы и расписание</h3>
           <span class="muted">Изменяются только последующие тренировки</span>
         </div>
-        <div class="schedule-week">
-          ${weekOrder.map((day) => {
-            const schedule = scheduleMap.get(day);
-            return scheduleDayEditor(day, schedule, {
-              active: `branchScheduleActive_${day}`,
-              start: `branchScheduleStart_${day}`,
-              end: `branchScheduleEnd_${day}`
-            });
-          }).join("")}
+        <div class="subgroup-list">
+          ${groups.map((group) => {
+            const scheduleMap = groupScheduleMap(group.id);
+            return `
+              <section class="subgroup-card">
+                <div class="subgroup-card-head">
+                  <div>
+                    <span class="subgroup-kicker">Подгруппа</span>
+                    <h4>${escapeHtml(group.name)}</h4>
+                  </div>
+                  <span class="subgroup-count">${groupStudents(group.id, { includeInactive: true }).length} учеников</span>
+                </div>
+                <div class="schedule-week">
+                  ${weekOrder.map((day) => scheduleDayEditor(day, scheduleMap.get(day), {
+                    active: `branchScheduleActive_${group.id}_${day}`,
+                    start: `branchScheduleStart_${group.id}_${day}`,
+                    end: `branchScheduleEnd_${group.id}_${day}`
+                  })).join("")}
+                </div>
+              </section>
+            `;
+          }).join("") || '<div class="empty-state">В филиале пока нет подгрупп.</div>'}
         </div>
         <div class="split-actions">
           <button class="primary-btn" type="button" data-action="save-branch-details" data-id="${escapeHtml(branch.id)}">Сохранить филиал</button>
@@ -2759,10 +3351,8 @@ function viewTrainings() {
   const filters = trainingPageFilters();
   const branchId = filters.branchId;
   const month = filters.month;
-  const trainings = db.trainings
-    .filter((training) => !training.deletedAt && !training.archivedAt && training.month === month)
-    .filter((training) => branchId === "all" || training.branchId === branchId)
-    .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+  const filterGroups = groupsForPageFilter(filters);
+  const trainings = trainingPageList(filters);
   const selected = trainings.find((training) => training.id === db.selectedTrainingId) || trainings.find((training) => training.date === TODAY) || trainings[0];
   return `
     <section class="panel">
@@ -2773,6 +3363,9 @@ function viewTrainings() {
         <select id="branchFilter">
           <option value="all" ${filters.branchId === "all" ? "selected" : ""}>Все филиалы</option>
           ${activeBranches().map((branch) => `<option value="${escapeHtml(branch.id)}" ${filters.branchId === branch.id ? "selected" : ""}>${escapeHtml(branch.name)}</option>`).join("")}
+        </select>
+        <select id="groupFilter" aria-label="Группа" ${filterGroups.length ? "" : "disabled"}>
+          ${filterGroups.length ? filterGroups.map((group) => `<option value="${escapeHtml(group.id)}" ${filters.groupId === group.id ? "selected" : ""}>${escapeHtml(groupFilterLabel(group, filters.branchId))}</option>`).join("") : '<option value="">Нет групп</option>'}
         </select>
         <select id="monthFilter">
           ${AVAILABLE_MONTHS.map((itemMonth) => `<option value="${itemMonth}" ${filters.month === itemMonth ? "selected" : ""}>${formatMonth(itemMonth)}</option>`).join("")}
@@ -2787,7 +3380,7 @@ function viewTrainings() {
         ${card("Оплата тренеров", money(trainerPayroll(trainings)), "Только если есть отметки")}
       </div>
       <div class="trainings-month">
-        ${monthAttendanceTable(month, branchId)}
+        ${monthAttendanceTable(month, branchId, { groupId: filters.groupId })}
       </div>
     </section>
   `;
@@ -2797,12 +3390,14 @@ function coachTrainingList(filters) {
   return db.trainings
     .filter((training) => !training.deletedAt && !training.archivedAt && training.month === filters.month)
     .filter((training) => filters.branchId === "all" || training.branchId === filters.branchId)
+    .filter((training) => Boolean(filters.groupId) && training.groupId === filters.groupId)
     .filter((training) => hasBranchAccess(training.branchId))
     .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
 }
 
 function viewCoachMode() {
   const filters = coachPageFilters();
+  const filterGroups = groupsForPageFilter(filters);
   const trainings = coachTrainingList(filters);
   const selected = trainings.find((training) => training.id === db.coachSelectedTrainingId) || trainings.find((training) => training.date >= TODAY) || trainings[0];
   if (selected && db.coachSelectedTrainingId !== selected.id) db.coachSelectedTrainingId = selected.id;
@@ -2822,6 +3417,9 @@ function viewCoachMode() {
         <select id="branchFilter">
           <option value="all" ${filters.branchId === "all" ? "selected" : ""}>Все филиалы</option>
           ${activeBranches().map((branch) => `<option value="${escapeHtml(branch.id)}" ${filters.branchId === branch.id ? "selected" : ""}>${escapeHtml(branch.name)}</option>`).join("")}
+        </select>
+        <select id="groupFilter" aria-label="Группа" ${filterGroups.length ? "" : "disabled"}>
+          ${filterGroups.length ? filterGroups.map((group) => `<option value="${escapeHtml(group.id)}" ${filters.groupId === group.id ? "selected" : ""}>${escapeHtml(groupFilterLabel(group, filters.branchId))}</option>`).join("") : '<option value="">Нет групп</option>'}
         </select>
         <select id="monthFilter">
           ${AVAILABLE_MONTHS.map((month) => `<option value="${month}" ${filters.month === month ? "selected" : ""}>${formatMonth(month)}</option>`).join("")}
@@ -2843,7 +3441,7 @@ function viewCoachMode() {
             return `<button class="coach-training-card ${selected?.id === training.id ? "active" : ""}" type="button" data-action="select-coach-training" data-id="${training.id}">
               <span>
                 <strong>${formatDate(training.date)}</strong>
-                <small>${training.startTime}-${training.endTime} · ${branchName(training.branchId)}</small>
+                <small>${training.startTime}-${training.endTime} · ${branchName(training.branchId)} · ${groupName(training.groupId)}</small>
               </span>
               ${statusPill(labels[status] || status, status === "DONE" ? "paid" : status === "NOT_HELD" || status === "CANCELLED" ? "inactive" : "neutral")}
             </button>`;
@@ -2856,7 +3454,7 @@ function viewCoachMode() {
           <div>
             <p class="eyebrow">Выбранная тренировка</p>
             <h2>${formatDate(selected.date)} · ${selected.startTime}-${selected.endTime}</h2>
-            <p>${branchName(selected.branchId)} · ${userName(selected.trainerId)}${selected.assistantConfirmed && selected.assistantId ? ` · помощник ${userName(selected.assistantId)}` : ""}</p>
+            <p>${branchName(selected.branchId)} · ${groupName(selected.groupId)} · ${userName(selected.trainerId)}${selected.assistantConfirmed && selected.assistantId ? ` · помощник ${userName(selected.assistantId)}` : ""}</p>
           </div>
           <div class="training-tools">${trainerChangeControl(selected)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", selected.id, "primary-btn")}${actionButton(selected.assistantConfirmed && selected.assistantId ? `Помощник: ${userName(selected.assistantId)}` : "Был помощник", "toggle-assistant", selected.id)}${actionButton("+ Доп. тренировка", "open-extra-training", selected.id)}${actionButton("×", "delete-coach-training", selected.id, "danger-btn icon-danger-btn")}</div></div>
         </div>
@@ -2926,7 +3524,7 @@ function calendarDropdown(trainings, selected, month) {
       <button class="calendar-toggle" type="button" data-action="toggle-calendar" data-id="calendar">
         <span>
           <strong>Календарь тренировок</strong>
-          <small>${selected ? `${formatDate(selected.date)} · ${selected.startTime}-${selected.endTime} · ${branchName(selected.branchId)}` : `${formatMonth(month)} · ${trainings.length} тренировок`}</small>
+          <small>${selected ? `${formatDate(selected.date)} · ${selected.startTime}-${selected.endTime} · ${branchName(selected.branchId)} · ${groupName(selected.groupId)}` : `${formatMonth(month)} · ${trainings.length} тренировок`}</small>
         </span>
         <span class="calendar-arrow">
           <span>${db.showCalendar ? "Скрыть" : "Открыть"}</span>
@@ -2942,7 +3540,7 @@ function calendarDropdown(trainings, selected, month) {
         return `<button class="calendar-item ${active ? "active" : ""}" type="button" data-action="select-training" data-id="${training.id}">
           <span>
             <strong>${formatDate(training.date)}</strong>
-            <small>${training.startTime}-${training.endTime} · ${branchName(training.branchId)}</small>
+            <small>${training.startTime}-${training.endTime} · ${branchName(training.branchId)} · ${groupName(training.groupId)}</small>
           </span>
           ${statusPill(labels[status], status === "DONE" ? "paid" : status === "NOT_HELD" || status === "CANCELLED" ? "inactive" : "neutral")}
         </button>`;
@@ -2957,14 +3555,14 @@ function trainingPicker(selected, trainings) {
     <button class="training-picker-main" type="button" data-action="toggle-training-picker" data-id="picker">
       <span>
         <strong>${selected ? `${formatDate(selected.date)} · ${selected.startTime}-${selected.endTime}` : "Выберите тренировку"}</strong>
-        <small>${selected ? branchName(selected.branchId) : "Нажмите, чтобы открыть список"}</small>
+        <small>${selected ? `${branchName(selected.branchId)} · ${groupName(selected.groupId)}` : "Нажмите, чтобы открыть список"}</small>
       </span>
       <span class="picker-chevron">${db.showTrainingPicker ? "▲" : "▼"}</span>
     </button>
     ${db.showTrainingPicker ? `<div class="training-picker-list">
       ${trainings.map((training) => `<button class="${selected?.id === training.id ? "active" : ""}" type="button" data-action="select-training" data-id="${training.id}">
         <strong>${formatDate(training.date)}</strong>
-        <span>${training.startTime}-${training.endTime} · ${branchName(training.branchId)}</span>
+        <span>${training.startTime}-${training.endTime} · ${branchName(training.branchId)} · ${groupName(training.groupId)}</span>
       </button>`).join("")}
     </div>` : ""}
   </section>`;
@@ -2972,7 +3570,10 @@ function trainingPicker(selected, trainings) {
 
 function monthAttendanceTable(month, branchId = db.filters.branchId, options = {}) {
   const compact = Boolean(options.compact);
-  if (branchId === "all") {
+  const groupId = options.groupId || "all";
+  const selectedGroup = groupId !== "all" ? byId(db.groups, groupId) : null;
+  const effectiveBranchId = selectedGroup?.branchId || branchId;
+  if (effectiveBranchId === "all") {
     return `<section class="panel">
       <h2>Таблица посещаемости за месяц</h2>
       <p>Выберите филиал в фильтре выше, чтобы открыть полную таблицу посещаемости на ${formatMonth(month)}.</p>
@@ -2980,15 +3581,16 @@ function monthAttendanceTable(month, branchId = db.filters.branchId, options = {
   }
 
   const trainings = db.trainings
-    .filter((training) => !training.deletedAt && !training.archivedAt && training.branchId === branchId && training.month === month)
+    .filter((training) => !training.deletedAt && !training.archivedAt && training.branchId === effectiveBranchId && training.month === month)
+    .filter((training) => groupId === "all" || training.groupId === groupId)
     .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
   const students = db.students
     .filter((student) => !student.deletedAt && !student.archivedAt && student.status !== "INACTIVE")
-    .filter((student) => activeEnrollments(student.id).some((enrollment) => enrollment.branchId === branchId))
+    .filter((student) => activeEnrollments(student.id).some((enrollment) => enrollment.branchId === effectiveBranchId && (groupId === "all" || enrollment.groupId === groupId)))
     .sort((a, b) => studentName(a.id).localeCompare(studentName(b.id), "ru"));
 
   if (!trainings.length) {
-    return `<section class="panel"><h2>Таблица посещаемости за месяц</h2><p>Для филиала «${branchName(branchId)}» нет тренировок на ${formatMonth(month)}.</p></section>`;
+    return `<section class="panel"><h2>Таблица посещаемости за месяц</h2><p>Для ${selectedGroup ? `группы «${groupName(groupId)}»` : `филиала «${branchName(effectiveBranchId)}»`} нет тренировок на ${formatMonth(month)}.</p></section>`;
   }
 
   const head = trainings.map((training) => {
@@ -3014,8 +3616,8 @@ function monthAttendanceTable(month, branchId = db.filters.branchId, options = {
   return `<section class="table-panel month-attendance ${compact ? "compact" : ""}">
     <div class="table-toolbar ${compact ? "compact" : ""}">
       <div>
-        <h2>Таблица посещаемости: ${branchName(branchId)}</h2>
-        <p>${formatMonth(month)} · нажмите на ячейку, чтобы переключить отметку</p>
+        <h2>Таблица посещаемости: ${selectedGroup ? groupName(groupId) : branchName(effectiveBranchId)}</h2>
+        <p>${selectedGroup ? `${branchName(effectiveBranchId)} · ` : ""}${formatMonth(month)} · нажмите на ячейку, чтобы переключить отметку</p>
       </div>
       ${compact ? "" : `<div class="split-actions"><span class="chip">Б — был</span><span class="chip">П — пробная</span><span class="chip">пусто — не был</span></div>`}
     </div>
@@ -3161,7 +3763,7 @@ function attendancePanel(training, trainings = [], month = db.filters.month) {
       <div>
         <p class="eyebrow">Конкретная тренировка</p>
         <h2>${formatDate(training.date)} · ${training.startTime}-${training.endTime}</h2>
-        <p>${branchName(training.branchId)} · ${userName(training.trainerId)}${training.assistantConfirmed && training.assistantId ? ` · помощник ${userName(training.assistantId)}` : ""}</p>
+        <p>${branchName(training.branchId)} · ${groupName(training.groupId)} · ${userName(training.trainerId)}${training.assistantConfirmed && training.assistantId ? ` · помощник ${userName(training.assistantId)}` : ""}</p>
       </div>
       <div class="training-tools">${trainerChangeControl(training)}<div class="split-actions">${actionButton("+ Пробный", "open-student-training", training.id, "primary-btn")}${actionButton(training.assistantConfirmed && training.assistantId ? `Помощник: ${userName(training.assistantId)}` : "Был помощник", "toggle-assistant", training.id)}${actionButton("+ Доп. тренировка", "open-extra-training", training.id)}${actionButton("Завершить", "finish-training", training.id)}${actionButton("×", "delete-coach-training", training.id, "danger-btn icon-danger-btn")}</div></div>
     </div>
@@ -3465,35 +4067,64 @@ function viewSettings() {
     ` : ""}
     ${tab === "schedule" ? `
       <section class="panel schedule-settings-panel">
-        <div class="panel-head">
-          <div><h2>Расписание</h2><p>Меняйте дни и время тренировок по каждому филиалу.</p></div>
-        </div>
-        <form id="scheduleSettingsForm">
-          <div class="schedule-settings">
-            ${branchColumns.map((branch) => {
-              const scheduleMap = branchScheduleMap(branch.id);
-              return `
-                <details class="accordion-drop">
-                  <summary>
-                    <span>${escapeHtml(branch.name)}</span>
-                    <strong>${scheduleMap.size} дн.</strong>
-                  </summary>
-                  <div class="accordion-body schedule-week">
-                    ${weekOrder.map((day) => {
-                      const schedule = scheduleMap.get(day);
-                      return scheduleDayEditor(day, schedule, {
-                        active: `scheduleActive_${branch.id}_${day}`,
-                        start: `scheduleStart_${branch.id}_${day}`,
-                        end: `scheduleEnd_${branch.id}_${day}`
-                      });
-                    }).join("")}
-                  </div>
-                </details>
-              `;
-            }).join("")}
-          </div>
-          <div class="split-actions"><button class="primary-btn" type="button" data-action="save-settings" data-id="settings">Сохранить расписание</button></div>
-        </form>
+        ${(() => {
+          const selectedBranch = branchColumns.find((branch) => branch.id === db.settingsBranchId);
+          if (!selectedBranch) {
+            return `
+              <div class="panel-head">
+                <div><h2>Расписание по филиалам</h2><p>Откройте филиал, чтобы создавать его группы и настраивать расписание.</p></div>
+              </div>
+              <div class="settings-branch-grid">
+                ${branchColumns.map((branch) => {
+                  const groups = db.groups.filter((group) => group.branchId === branch.id && !group.deletedAt && !group.archivedAt && group.isActive);
+                  const scheduleCount = groups.reduce((sum, group) => sum + groupScheduleMap(group.id).size, 0);
+                  return `<button class="settings-branch-card" type="button" data-action="set-settings-branch" data-id="${escapeHtml(branch.id)}">
+                    <span><strong>${escapeHtml(branch.name)}</strong><small>${groups.length ? `${groups.length} групп · ${scheduleCount} тренировок в неделю` : "Группы еще не добавлены"}</small></span>
+                    <b aria-hidden="true">›</b>
+                  </button>`;
+                }).join("")}
+              </div>
+            `;
+          }
+
+          const groups = db.groups.filter((group) => group.branchId === selectedBranch.id && !group.deletedAt && !group.archivedAt && group.isActive);
+          return `
+            <div class="settings-branch-page-head">
+              <button class="ghost-btn" type="button" data-action="back-settings-branches" data-id="all">← Все филиалы</button>
+              <div><p class="eyebrow">Настройка филиала</p><h2>${escapeHtml(selectedBranch.name)}</h2></div>
+            </div>
+            <div class="add-subgroup-bar">
+              <label for="newSettingsGroupName">Новая группа</label>
+              <div><input id="newSettingsGroupName" placeholder="Например, 1-2 класс" maxlength="120"><button class="primary-btn" type="button" data-action="add-settings-group" data-id="${escapeHtml(selectedBranch.id)}">+ Добавить группу</button></div>
+            </div>
+            <form id="scheduleSettingsForm" data-branch="${escapeHtml(selectedBranch.id)}">
+              <div class="subgroup-list">
+                ${groups.map((group) => {
+                  const scheduleMap = groupScheduleMap(group.id);
+                  return `
+                    <section class="subgroup-card compact">
+                      <div class="subgroup-card-head">
+                        <label class="group-name-editor">
+                          <span>Название группы</span>
+                          <input name="groupName_${escapeHtml(group.id)}" value="${escapeHtml(group.name)}" maxlength="120" autocomplete="off">
+                        </label>
+                        <span class="subgroup-count">${scheduleMap.size} дн.</span>
+                      </div>
+                      <div class="schedule-week">
+                        ${weekOrder.map((day) => scheduleDayEditor(day, scheduleMap.get(day), {
+                          active: `scheduleActive_${group.id}_${day}`,
+                          start: `scheduleStart_${group.id}_${day}`,
+                          end: `scheduleEnd_${group.id}_${day}`
+                        })).join("")}
+                      </div>
+                    </section>
+                  `;
+                }).join("") || '<div class="empty-state"><strong>Групп пока нет</strong><p>Введите название выше и нажмите «Добавить группу».</p></div>'}
+              </div>
+              ${groups.length ? '<div class="split-actions"><button class="primary-btn" type="button" data-action="save-settings" data-id="settings">Сохранить расписание</button></div>' : ""}
+            </form>
+          `;
+        })()}
       </section>
     ` : ""}
     ${tab === "users" ? `
@@ -3679,8 +4310,29 @@ function monthClosedForBranch(branchId, month) {
 }
 
 function trainingPageFilters() {
-  if (!db.trainingFilters) db.trainingFilters = { branchId: "all", month: CURRENT_MONTH };
+  if (!db.trainingFilters) db.trainingFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
+  groupsForPageFilter(db.trainingFilters);
   return db.trainingFilters;
+}
+
+function groupsForPageFilter(filters) {
+  const groups = activeGroups()
+    .filter((group) => filters.branchId === "all" || group.branchId === filters.branchId)
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  if (!groups.some((group) => group.id === filters.groupId)) filters.groupId = groups[0]?.id || "";
+  return groups;
+}
+
+function groupFilterLabel(group, branchId) {
+  return branchId === "all" ? `${branchName(group.branchId)} · ${group.name}` : group.name;
+}
+
+function trainingPageList(filters) {
+  return db.trainings
+    .filter((training) => !training.deletedAt && !training.archivedAt && training.month === filters.month)
+    .filter((training) => filters.branchId === "all" || training.branchId === filters.branchId)
+    .filter((training) => Boolean(filters.groupId) && training.groupId === filters.groupId)
+    .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
 }
 
 function paymentPageFilters() {
@@ -3689,8 +4341,9 @@ function paymentPageFilters() {
 }
 
 function coachPageFilters() {
-  if (!db.coachFilters) db.coachFilters = { branchId: "all", month: CURRENT_MONTH };
+  if (!db.coachFilters) db.coachFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
   if (!AVAILABLE_MONTHS.includes(db.coachFilters.month)) db.coachFilters.month = CURRENT_MONTH;
+  groupsForPageFilter(db.coachFilters);
   return db.coachFilters;
 }
 
@@ -4170,38 +4823,41 @@ function saveBranchDetails(branchId) {
   const form = document.getElementById("branchDetailsForm");
   if (!branch || !form) return toast("Филиал не найден");
 
-  const groupId = ensureRosterGroup(branchId);
-  const group = byId(db.groups, groupId);
+  const groups = db.groups.filter((group) => group.branchId === branchId && !group.deletedAt && !group.archivedAt && group.isActive);
   const trainerId = String(new FormData(form).get("branchTrainer") || "");
   const trainer = byId(db.users, trainerId);
-  if (!group || !trainer || trainer.deletedAt || trainer.role !== "coach") return toast("Выберите сотрудника с ролью Тренер");
+  if (!groups.length) return toast("Сначала добавьте группу для этого филиала");
+  if (!trainer || trainer.deletedAt || trainer.role !== "coach") return toast("Выберите сотрудника с ролью Тренер");
 
   assignBranchTrainer(branchId, trainerId);
 
   const weekOrder = [1, 2, 3, 4, 5, 6, 0];
-  const nextSchedules = [];
-  for (const day of weekOrder) {
-    const activeInput = form.querySelector(`[name="branchScheduleActive_${day}"]`);
-    if (!activeInput?.checked) continue;
-    const start = form.querySelector(`[name="branchScheduleStart_${day}"]`)?.value || "";
-    const end = form.querySelector(`[name="branchScheduleEnd_${day}"]`)?.value || "";
-    if (!timeIsValid(start) || !timeIsValid(end)) return toast(`Проверьте время: ${weekdayFullName(day)}`);
-    if (start >= end) return toast(`Конец должен быть позже начала: ${weekdayFullName(day)}`);
-    nextSchedules.push({
-      id: `real_sch_${branchId}_${day}_0`,
-      groupId,
-      weekday: day,
-      startTime: start,
-      endTime: end,
-      startsAt: TODAY,
-      endsAt: null
-    });
+  let scheduleCount = 0;
+  for (const group of groups) {
+    const nextSchedules = [];
+    for (const day of weekOrder) {
+      const activeInput = form.querySelector(`[name="branchScheduleActive_${group.id}_${day}"]`);
+      if (!activeInput?.checked) continue;
+      const start = form.querySelector(`[name="branchScheduleStart_${group.id}_${day}"]`)?.value || "";
+      const end = form.querySelector(`[name="branchScheduleEnd_${group.id}_${day}"]`)?.value || "";
+      if (!timeIsValid(start) || !timeIsValid(end)) return toast(`Проверьте время: ${group.name}, ${weekdayFullName(day)}`);
+      if (start >= end) return toast(`Конец должен быть позже начала: ${group.name}, ${weekdayFullName(day)}`);
+      nextSchedules.push({
+        id: `real_sch_${group.id}_${day}_0`,
+        groupId: group.id,
+        weekday: day,
+        startTime: start,
+        endTime: end,
+        startsAt: TODAY,
+        endsAt: null
+      });
+    }
+    db.schedules = db.schedules.filter((schedule) => schedule.groupId !== group.id);
+    db.schedules.push(...nextSchedules);
+    scheduleCount += nextSchedules.length;
   }
-
-  db.schedules = db.schedules.filter((schedule) => schedule.groupId !== groupId);
-  db.schedules.push(...nextSchedules);
   rebuildBranchTrainingsFromSchedule(branchId);
-  audit("Изменен филиал", `${branch.name}: тренер ${userName(trainerId)}, расписание ${nextSchedules.length} дн.`);
+  audit("Изменен филиал", `${branch.name}: тренер ${userName(trainerId)}, подгрупп ${groups.length}, занятий ${scheduleCount}`);
   saveData("Филиал сохранен");
   render();
 }
@@ -4221,10 +4877,28 @@ function copyText(text, message) {
 }
 
 function bindView() {
-  root.querySelector("#loginForm")?.addEventListener("submit", (event) => {
+  root.querySelector("#loginForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    loginUser(form.get("login"), form.get("password"));
+    const formElement = event.currentTarget;
+    const submitButton = formElement.querySelector('button[type="submit"]');
+    const form = new FormData(formElement);
+    if (submitButton?.disabled) return;
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Проверяем...";
+    }
+    showLoginStatus("Подключаемся к общей базе...", "info");
+    try {
+      await loginUser(form.get("login"), form.get("password"));
+    } catch (error) {
+      console.error("Непредвиденная ошибка входа", error);
+      showLoginStatus("Не удалось выполнить вход. Обновите страницу и попробуйте снова.", "error");
+    } finally {
+      if (submitButton?.isConnected) {
+        submitButton.disabled = false;
+        submitButton.textContent = "Войти";
+      }
+    }
   });
 
   root.querySelectorAll("[data-action]").forEach((el) => {
@@ -4278,12 +4952,11 @@ function bindView() {
     if (db.activeView === "trainings") {
       const filters = trainingPageFilters();
       filters.branchId = event.target.value;
+      filters.groupId = "";
+      groupsForPageFilter(filters);
       const branchMonths = AVAILABLE_MONTHS;
       if (!branchMonths.includes(filters.month)) filters.month = CURRENT_MONTH;
-      const trainings = db.trainings
-        .filter((training) => !training.deletedAt && !training.archivedAt && training.month === filters.month)
-        .filter((training) => filters.branchId === "all" || training.branchId === filters.branchId)
-        .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+      const trainings = trainingPageList(filters);
       db.selectedTrainingId = trainings[0]?.id || null;
     } else if (db.activeView === "payments") {
       const filters = paymentPageFilters();
@@ -4296,6 +4969,8 @@ function bindView() {
     } else if (db.activeView === "coach") {
       const filters = coachPageFilters();
       filters.branchId = event.target.value;
+      filters.groupId = "";
+      groupsForPageFilter(filters);
       const trainings = coachTrainingList(filters);
       db.coachSelectedTrainingId = trainings[0]?.id || null;
     } else if (db.activeView === "messages") {
@@ -4309,7 +4984,17 @@ function bindView() {
     render();
   });
   root.querySelector("#groupFilter")?.addEventListener("change", (event) => {
-    db.filters.groupId = event.target.value;
+    if (db.activeView === "trainings") {
+      const filters = trainingPageFilters();
+      filters.groupId = event.target.value;
+      db.selectedTrainingId = trainingPageList(filters)[0]?.id || null;
+    } else if (db.activeView === "coach") {
+      const filters = coachPageFilters();
+      filters.groupId = event.target.value;
+      db.coachSelectedTrainingId = coachTrainingList(filters)[0]?.id || null;
+    } else {
+      db.filters.groupId = event.target.value;
+    }
     saveData();
     render();
   });
@@ -4317,10 +5002,7 @@ function bindView() {
     if (db.activeView === "trainings") {
       const filters = trainingPageFilters();
       filters.month = event.target.value;
-      const trainings = db.trainings
-        .filter((training) => !training.deletedAt && !training.archivedAt && training.month === filters.month)
-        .filter((training) => filters.branchId === "all" || training.branchId === filters.branchId)
-        .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+      const trainings = trainingPageList(filters);
       db.selectedTrainingId = trainings[0]?.id || null;
     } else if (db.activeView === "payments") {
       const filters = paymentPageFilters();
@@ -4435,6 +5117,17 @@ function runAction(action, itemId) {
       saveData();
       render();
     },
+    "set-settings-branch": () => {
+      db.settingsBranchId = itemId;
+      saveData();
+      render();
+    },
+    "back-settings-branches": () => {
+      db.settingsBranchId = null;
+      saveData();
+      render();
+    },
+    "add-settings-group": () => addSettingsGroup(itemId),
     "stock-reset": () => stockReset(),
     "inactive": () => {
       const student = byId(db.students, itemId);
@@ -4455,10 +5148,18 @@ function runAction(action, itemId) {
     },
     "filter-branch": () => { db.filters.branchId = itemId; db.filters.groupId = "all"; db.activeView = "students"; saveData(); render(); },
     "filter-group": () => { db.filters.groupId = itemId; db.activeView = "students"; saveData(); render(); },
-    "group-trainings": () => { db.filters.groupId = itemId; db.activeView = "trainings"; saveData(); render(); },
+    "group-trainings": () => {
+      const group = byId(db.groups, itemId);
+      if (!group) return;
+      db.trainingFilters = { branchId: group.branchId, groupId: group.id, month: db.trainingFilters?.month || CURRENT_MONTH };
+      db.activeView = "trainings";
+      saveData();
+      render();
+    },
     "archive-branch": () => archiveBranch(itemId),
     "add-branch": () => addBranch(),
     "add-group": () => addGroup(),
+    "add-branch-group": () => addGroup(itemId),
     "add-training": () => addTraining(),
     "open-extra-training": () => openExtraTrainingDialog(itemId),
     "save-branch-details": () => saveBranchDetails(itemId),
@@ -4506,7 +5207,8 @@ function runAction(action, itemId) {
     "purge-deleted-all": () => purgeAllDeleted(),
     "reset-filters": () => {
       db.filters = { branchId: "all", groupId: "all", month: CURRENT_MONTH };
-      db.trainingFilters = { branchId: "all", month: CURRENT_MONTH };
+      db.trainingFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
+      db.coachFilters = { branchId: "all", groupId: "", month: CURRENT_MONTH };
       db.paymentFilters = { branchId: "all", month: CURRENT_MONTH };
       saveData();
       render();
@@ -4590,6 +5292,7 @@ function addStudentFromForm(event) {
 
   const groupId = form.get("group");
   const group = byId(db.groups, groupId);
+  if (!group) return toast("Сначала добавьте группу для выбранного филиала в настройках расписания");
   const studentId = id("st");
   const parentId = id("par");
   const status = form.get("status") === "Пробный" ? "TRIAL" : form.get("status") === "Неактивный" ? "INACTIVE" : "ACTIVE";
@@ -4641,7 +5344,8 @@ function updateStudentFromForm(studentId, form) {
   const status = form.get("status") === "Пробный" ? "TRIAL" : form.get("status") === "Неактивный" ? "INACTIVE" : "ACTIVE";
   const group = byId(db.groups, groupId);
 
-  if (!lastName || !firstName || !birthDateIsValid(birthDate) || !group) return toast("Заполните дату рождения в формате 01.01.2017");
+  if (!lastName || !firstName || !birthDateIsValid(birthDate)) return toast("Заполните дату рождения в формате 01.01.2017");
+  if (!group) return toast("Сначала добавьте группу для выбранного филиала в настройках расписания");
 
   student.firstName = firstName;
   student.lastName = lastName;
@@ -4728,33 +5432,47 @@ function addBranch() {
   if (!name) return;
   const branch = { id: id("br"), name, address: "Указать адрес", isActive: true, archivedAt: null, deletedAt: null };
   db.branches.push(branch);
-  const groupId = ensureRosterGroup(branch.id);
-  const trainerId = fallbackCoachId();
-  if (trainerId) assignBranchTrainer(branch.id, trainerId);
   db.users.forEach((user) => {
     if (user.role !== "owner") return;
     if (!user.branchIds.includes(branch.id)) user.branchIds.push(branch.id);
-    if (!user.groupIds.includes(groupId)) user.groupIds.push(groupId);
   });
   db.selectedBranchId = branch.id;
   db.activeView = "branches";
   audit("Создан филиал", name);
-  saveData("Филиал добавлен. Заполните расписание и сохраните филиал");
+  saveData("Филиал добавлен. Создайте для него группы в настройках расписания");
   render();
   setTimeout(() => document.querySelector(".branch-detail-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
 }
 
-function addGroup() {
-  const branch = activeBranches()[0];
+function addGroup(branchId = db.selectedBranchId, providedName = "") {
+  if (!isOwner()) return toast("Подгруппу может добавить только владелец");
+  const branch = activeBranches().find((item) => item.id === branchId) || activeBranches()[0];
   if (!branch) return;
-  const name = cleanText(prompt("Название группы"), 120);
+  const name = cleanText(providedName || prompt(`Название группы для филиала «${branch.name}»`), 120);
   if (!name) return;
-  const group = { id: id("gr"), branchId: branch.id, name, ageRange: "указать", trainerId: currentUser().id, assistantId: null, isActive: true, archivedAt: null, deletedAt: null };
+  const branchGroup = db.groups.find((item) => item.branchId === branch.id && !item.deletedAt && !item.archivedAt);
+  const group = { id: id("gr"), branchId: branch.id, name, ageRange: name, trainerId: branchGroup?.trainerId || fallbackCoachId(), assistantId: null, isActive: true, archivedAt: null, deletedAt: null };
   db.groups.push(group);
-  currentUser().groupIds.push(group.id);
+  db.users.forEach((user) => {
+    if (user.deletedAt) return;
+    if (user.role === "owner" || (user.role === "coach" && (user.branchIds || []).includes(branch.id))) {
+      user.groupIds ||= [];
+      if (!user.groupIds.includes(group.id)) user.groupIds.push(group.id);
+    }
+  });
   audit("Создана группа", name);
   saveData("Группа добавлена");
   render();
+}
+
+function addSettingsGroup(branchId) {
+  const input = root.querySelector("#newSettingsGroupName");
+  const name = cleanText(input?.value, 120);
+  if (!name) return toast("Введите название группы");
+  const duplicate = db.groups.some((group) => group.branchId === branchId && !group.deletedAt && group.name.toLowerCase() === name.toLowerCase());
+  if (duplicate) return toast("В этом филиале уже есть группа с таким названием");
+  db.settingsBranchId = branchId;
+  addGroup(branchId, name);
 }
 
 function addTraining() {
@@ -4837,7 +5555,7 @@ function saveExtraTrainingFromForm(event) {
     archivedAt: null
   };
   db.trainings.push(training);
-  db.coachFilters = { branchId: training.branchId, month };
+  db.coachFilters = { branchId: training.branchId, groupId: training.groupId, month };
   db.coachSelectedTrainingId = training.id;
   audit("Создана дополнительная тренировка тренером", `${branchName(training.branchId)} ${formatDate(date)} ${startTime}-${endTime}`);
   extraTrainingDialog.close();
@@ -4964,36 +5682,50 @@ async function saveSettings() {
     syncBranchTrainersFromCoachAccess();
   }
   const scheduleForm = document.getElementById("scheduleSettingsForm");
-  const changedScheduleBranches = [];
+  const changedScheduleBranches = new Set();
+  let renamedGroups = false;
   if (scheduleForm) {
     const weekOrder = [1, 2, 3, 4, 5, 6, 0];
-    for (const branch of db.branches.filter((item) => !item.deletedAt && !item.archivedAt && item.isActive)) {
-      const groupId = ensureRosterGroup(branch.id);
+    const scheduleBranchId = scheduleForm.dataset.branch || "";
+    const editableGroups = db.groups.filter((item) => !item.deletedAt && !item.archivedAt && item.isActive && (!scheduleBranchId || item.branchId === scheduleBranchId));
+    const nextGroupNames = new Map();
+    const normalizedNames = new Set();
+    for (const group of editableGroups) {
+      const nextName = cleanText(scheduleForm.querySelector(`[name="groupName_${group.id}"]`)?.value, 120);
+      if (!nextName) return toast("Введите название каждой группы");
+      const normalizedName = nextName.toLocaleLowerCase("ru");
+      if (normalizedNames.has(normalizedName)) return toast(`Название группы «${nextName}» уже используется в этом филиале`);
+      normalizedNames.add(normalizedName);
+      nextGroupNames.set(group.id, nextName);
+    }
+    for (const group of editableGroups) {
+      const branch = byId(db.branches, group.branchId);
+      if (!branch || branch.deletedAt || branch.archivedAt || !branch.isActive) continue;
       const nextSchedules = [];
       for (const day of weekOrder) {
-        const activeInput = scheduleForm.querySelector(`[name="scheduleActive_${branch.id}_${day}"]`);
+        const activeInput = scheduleForm.querySelector(`[name="scheduleActive_${group.id}_${day}"]`);
         if (!activeInput?.checked) continue;
-        const start = scheduleForm.querySelector(`[name="scheduleStart_${branch.id}_${day}"]`)?.value || "";
-        const end = scheduleForm.querySelector(`[name="scheduleEnd_${branch.id}_${day}"]`)?.value || "";
+        const start = scheduleForm.querySelector(`[name="scheduleStart_${group.id}_${day}"]`)?.value || "";
+        const end = scheduleForm.querySelector(`[name="scheduleEnd_${group.id}_${day}"]`)?.value || "";
         if (!timeIsValid(start) || !timeIsValid(end)) {
-          return toast(`Проверьте время: ${branch.name}, ${weekdayFullName(day)}`);
+          return toast(`Проверьте время: ${branch.name}, ${group.name}, ${weekdayFullName(day)}`);
         }
         if (start >= end) {
-          return toast(`Конец должен быть позже начала: ${branch.name}, ${weekdayFullName(day)}`);
+          return toast(`Конец должен быть позже начала: ${branch.name}, ${group.name}, ${weekdayFullName(day)}`);
         }
         nextSchedules.push({
-          id: `real_sch_${branch.id}_${day}_0`,
-          groupId,
+          id: `real_sch_${group.id}_${day}_0`,
+          groupId: group.id,
           weekday: day,
           startTime: start,
           endTime: end,
-          startsAt: "2026-07-01",
+          startsAt: TODAY,
           endsAt: null
         });
       }
 
       const currentSchedules = db.schedules
-        .filter((schedule) => schedule.groupId === groupId && !schedule.endsAt)
+        .filter((schedule) => schedule.groupId === group.id && !schedule.endsAt)
         .map((schedule) => `${schedule.weekday}|${schedule.startTime}|${schedule.endTime}`)
         .sort()
         .join(";");
@@ -5003,15 +5735,22 @@ async function saveSettings() {
         .join(";");
 
       if (currentSchedules !== nextSignature) {
-        db.schedules = db.schedules.filter((schedule) => schedule.groupId !== groupId);
+        db.schedules = db.schedules.filter((schedule) => schedule.groupId !== group.id);
         db.schedules.push(...nextSchedules);
-        changedScheduleBranches.push(branch.id);
+        changedScheduleBranches.add(branch.id);
+      }
+    }
+    for (const group of editableGroups) {
+      const nextName = nextGroupNames.get(group.id);
+      if (nextName !== group.name) {
+        group.name = nextName;
+        renamedGroups = true;
       }
     }
   }
   changedScheduleBranches.forEach((branchId) => rebuildBranchTrainingsFromSchedule(branchId));
-  audit("Изменены настройки CRM", "стоимость, роли и филиалы пользователей");
-  saveData(changedScheduleBranches.length ? "Настройки и расписание сохранены" : "Настройки сохранены. Пользователи и роли обновлены.");
+  audit("Изменены настройки CRM", "стоимость, роли, группы, расписание и филиалы пользователей");
+  saveData(changedScheduleBranches.size || renamedGroups ? "Группы и расписание сохранены" : "Настройки сохранены. Пользователи и роли обновлены.");
   render();
 }
 
@@ -5107,6 +5846,16 @@ mobileMenuButton?.addEventListener("click", () => {
 
 mobileNavBackdrop?.addEventListener("click", () => setMobileNav(false));
 mobileNavCloseButton?.addEventListener("click", () => setMobileNav(false));
+
+window.addEventListener("ataka:sync-status", (event) => {
+  syncIndicatorState = event.detail || { status: "idle", at: "", message: "" };
+  updateSyncIndicator();
+});
+
+syncStatusButton?.addEventListener("click", () => {
+  if (!syncStatusButton.classList.contains("can-retry")) return;
+  if (!window.AtakaRemote?.retrySave?.()) toast("Нет изменений для повторной отправки");
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") setMobileNav(false);

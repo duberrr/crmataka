@@ -50,12 +50,19 @@
     "archive",
     "auditLog"
   ]);
-  const META_KEYS = ["scheduleVersion", "realRosterVersion", "assistantRuleVersion", "historyResetVersion"];
+  const META_KEYS = ["scheduleVersion", "subgroupVersion", "branch84Version", "branch64Version", "branch74SecondVersion", "groupStructureVersion", "realRosterVersion", "assistantRuleVersion", "historyResetVersion"];
   let saving = false;
   let pendingState = null;
   let saveTimer = null;
   let lastSavedParts = {};
   let needsPartMigration = false;
+  let failedState = null;
+  let syncStatus = { status: "idle", at: localStorage.getItem(LAST_REMOTE_KEY) || "", message: "" };
+
+  function setSyncStatus(status, details = {}) {
+    syncStatus = { status, at: details.at || syncStatus.at || "", message: details.message || "" };
+    window.dispatchEvent(new CustomEvent("ataka:sync-status", { detail: { ...syncStatus } }));
+  }
 
   function cleanUrl() {
     return String(CONFIG.url || "").replace(/\/+$/, "");
@@ -142,14 +149,17 @@
 
   async function signIn(login, password) {
     if (!isReady()) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     const response = await fetch(`${cleanUrl()}/auth/v1/token?grant_type=password`, {
       method: "POST",
+      signal: controller.signal,
       headers: {
         "apikey": CONFIG.anonKey,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ email: login, password })
-    });
+    }).finally(() => clearTimeout(timer));
     if (!response.ok) return null;
     const data = await response.json();
     localStorage.setItem(TOKEN_KEY, data.access_token);
@@ -301,11 +311,17 @@
   }
 
   async function saveStateNow(state) {
-    if (!isReady() || !isSignedIn() || saving) {
+    if (!isReady() || !isSignedIn()) {
+      failedState = clone(state);
+      setSyncStatus("offline", { message: "Нет подключения к общей базе" });
+      return;
+    }
+    if (saving) {
       pendingState = state;
       return;
     }
     saving = true;
+    setSyncStatus("saving");
     try {
       const parts = splitState(state);
       const changedParts = STATE_PARTS.filter((part) => needsPartMigration || stable(parts[part]) !== stable(lastSavedParts[part]));
@@ -323,7 +339,14 @@
       }
 
       needsPartMigration = false;
-      localStorage.setItem(LAST_REMOTE_KEY, new Date().toISOString());
+      const savedAt = new Date().toISOString();
+      localStorage.setItem(LAST_REMOTE_KEY, savedAt);
+      failedState = null;
+      setSyncStatus("saved", { at: savedAt });
+    } catch (error) {
+      failedState = clone(state);
+      console.error("Не удалось сохранить изменения в общей базе", error);
+      setSyncStatus("error", { message: error?.name === "AbortError" ? "Сервер не ответил вовремя" : "Не удалось сохранить изменения" });
     } finally {
       saving = false;
       if (pendingState) {
@@ -335,11 +358,36 @@
   }
 
   function saveState(state) {
-    if (!isReady() || !isSignedIn()) return;
+    if (!isReady() || !isSignedIn()) {
+      failedState = clone(state);
+      setSyncStatus("offline", { message: "Нет подключения к общей базе" });
+      return;
+    }
     clearTimeout(saveTimer);
     const copy = clone(state);
+    const parts = splitState(copy);
+    const hasChanges = needsPartMigration || STATE_PARTS.some((part) => stable(parts[part]) !== stable(lastSavedParts[part]));
+    if (!hasChanges && !saving) {
+      setSyncStatus("saved", { at: localStorage.getItem(LAST_REMOTE_KEY) || new Date().toISOString() });
+      return;
+    }
+    failedState = null;
+    setSyncStatus("pending");
     saveTimer = setTimeout(() => saveStateNow(copy), 500);
   }
+
+  function retrySave() {
+    if (!failedState) return false;
+    const state = clone(failedState);
+    failedState = null;
+    saveState(state);
+    return true;
+  }
+
+  window.addEventListener("online", () => retrySave());
+  window.addEventListener("offline", () => {
+    if (saving || pendingState || failedState) setSyncStatus("offline", { message: "Нет подключения к интернету" });
+  });
 
   window.AtakaRemote = {
     isReady,
@@ -348,6 +396,8 @@
     signOut,
     refreshSession,
     loadState,
-    saveState
+    saveState,
+    retrySave,
+    getSyncStatus: () => ({ ...syncStatus })
   };
 })();

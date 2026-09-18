@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Атака CRM</title>
-    <link rel="stylesheet" href="styles.css?v=20260814-birthdate-dot-format" />
+    <link rel="stylesheet" href="styles.css?v=20260918-school-74-second" />
   </head>
   <body>
     <div class="app-shell">
@@ -33,7 +33,12 @@
               <h1 id="pageTitle">Рабочий стол</h1>
             </div>
           </div>
-          <div class="topbar-actions"></div>
+          <div class="topbar-actions">
+            <button class="sync-status" id="syncStatus" type="button" hidden aria-live="polite">
+              <span class="sync-status-dot" aria-hidden="true"></span>
+              <span id="syncStatusText">Проверяем общую базу</span>
+            </button>
+          </div>
         </header>
 
         <section class="login-hero" id="welcomePanel">
@@ -71,7 +76,7 @@
           <label>Телефон<input name="phone" placeholder="Можно заполнить позже" /></label>
           <label>VK родителя<input name="parentVk" placeholder="Ссылка на профиль" /></label>
           <label>Филиал<select name="branch" id="studentBranch"></select></label>
-          <label class="hidden-field"><select name="group" id="studentGroup"></select></label>
+          <label>Подгруппа<select name="group" id="studentGroup"></select></label>
           <label>Источник<select name="source">
             <option>школа</option>
             <option>пробное мероприятие</option>
@@ -137,7 +142,7 @@
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 
     <script src="supabase-config.js?v=20260814-birthdate-dot-format"></script>
-    <script src="supabase-sync.js?v=20260814-birthdate-dot-format"></script>
-    <script src="app.js?v=20260814-birthdate-dot-format"></script>
+    <script src="supabase-sync.js?v=20260918-school-74-second"></script>
+    <script src="app.js?v=20260918-school-74-second"></script>
   </body>
 </html>
